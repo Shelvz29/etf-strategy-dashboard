@@ -1,0 +1,7 @@
+streamlit==1.64.0
+exchange-calendars==4.13.2
+plotly==7.1.0
+numpy==2.5.3
+pandas==3.0.6
+requests==2.34.2
+tzdata==2026.4

@@ -1,0 +1,32 @@
+{
+  "name": "XSD和SOXL组合策略",
+  "source": "C:\\Users\\admin\\Documents\\股票\\backtests\\2026-10-02-xsd-soxl\\strategy.py",
+  "sha256": "5141a12980fa001451fa2d3fac85dcdeef9e2e493bb6dc1ae56e5579aa1920a9",
+  "parameters": {
+    "annual_days": 252,
+    "macro_annual_days": null,
+    "short_days": 20,
+    "macro_buffer": 0.01,
+    "volume_multiple": 3.5,
+    "volume_days": 60,
+    "red_body": 0.02,
+    "high_zone": 0.95,
+    "cash_drawdown": 0.15,
+    "deep_bull": 0.25,
+    "deep_bear": 0.3,
+    "bull_cool": 1,
+    "bear_cool": 2,
+    "bull_defense": 0.9,
+    "bear_defense": 0.5,
+    "attack": 0.99,
+    "top_release": "annual_or_drawdown",
+    "deep_latch": false,
+    "cooldown_mode": "consecutive_above20",
+    "signal_adjusted": false,
+    "peak_seed": "high",
+    "volume_include_today": false,
+    "macro_enabled": true
+  },
+  "replay_start": "2017-01-02",
+  "execution": "Next regular US session open; unchanged targets do not rebalance daily"
+}
