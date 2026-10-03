@@ -1,0 +1,683 @@
+# ═══════════════════════════════════════════════════════════════
+#  纳指四季 | QQQ/TQQQ 量化策略 V22.3 
+#
+#  📺 YouTube: 财富种植园 @wealthplantations
+#     https://www.youtube.com/@wealthplantations
+#  🌐 AI助手 AI Assistant: aiyuan.ai
+#  🎁 免费领取最新版 / Get latest version: aiyuan.ai/strategy/nazhi-siji
+#  👑 会员网 Membership: wealthplantations.com
+#  🧮 CRS境外税算算 Tax Calculator: wealthlplantation.com
+#  💬 微信 WeChat: wealthplantations
+#
+#  © 2026 园园AI (aiyuan.ai) - All Rights Reserved
+#  License: CC BY-NC 4.0
+#  可自由分享，须保留署名，不可商用
+#  Free to share with attribution, non-commercial use only
+# ═══════════════════════════════════════════════════════════════
+
+# V22.3 = V22.2 基础上仅改一处：NORMAL 状态从 45%QQQ+45%TQQQ 改为 只持 90% TQQQ(+10%现金)，
+#         追求更高回报（其余逻辑全不变）。连带：NORMAL 双资产再平衡维护仅在双资产时生效（单资产跳过）。
+#
+# V22.2 = V22.1 纯增量（v22.1 结构 100% 保留）。新增两点：
+#   ① 深坑门槛：drawdown ≤ -30% 须 MA20 向上才进 ZONE_DESPAIR_TQQQ（全仓TQQQ抄底）；
+#      MA20 未向上则回退 ZONE_BATTLE_DEFEND（90% QQQ 防守，回撤更小，不踏空V形底）。
+#   ② 乖离逃顶 HI + 逃顶后解锁链：
+#      触发：QQQ 正乖离 MA200 > 20% → HI（降至 1.0 倍纯 QQQ，目标 QQQ 100%/TQQQ 0%）。
+#      —— "解锁"仅在逃顶后(HI/HI_CASH)生效，出场只看 MA20/MA200，不看乖离回落：
+#         HI 中：创新高/乖离仍>20%/仍站MA20上 → 保持 HI（锁利）
+#                跌破 MA20 且 MA20 斜率向下      → HI_CASH（卖 QQQ 空仓）
+#                跌破 MA200                      → 恢复 v22.1 判断
+#         HI_CASH 中：站稳 MA20（涨回）         → NORMAL
+#                     跌破 MA200（续跌）         → 恢复 v22.1 判断
+#                     否则                       → 保持空仓
+#      —— 未触发逃顶时：NORMAL 即使跌破 MA20+斜率向下，也维持 v22.1 NORMAL（绝不空仓）。
+
+class Strategy(StrategyBase):
+    def initialize(self):
+        declare_strategy_type(AlgoStrategyType.SECURITY)
+        self.trigger_symbols()
+        self.custom_indicator()
+        self.global_variables()
+        self._init_ath_price()
+        print("[INIT] 纳指四季 启动（顺势而种，应季而收）")
+        alert(
+            title="【纳指四季 · 策略启动】",
+            content="顺势而种，应季而收 —— 夏·满杠杆乘势，秋·高位落袋降杠杆，冬·破位转现金避寒，春·深坑企稳再布局。纳指趋势智能择时，进退有据。（标的含 TQQQ 三倍杠杆，高波动，请知悉回撤风险。）"
+        )
+
+    def trigger_symbols(self):
+        self.trig_main = declare_trig_symbol()
+
+    def custom_indicator(self):
+        pass
+
+    def global_variables(self):
+        self.contract_QQQ = Contract("US.QQQ")
+        self.contract_TQQQ = Contract("US.TQQQ")
+        self.ma_long_window = 200
+        self.ma_short_window = 20
+        self.vol_window = 60
+        self.vol_factor = 2.2
+        self.high_zone = 0.95
+        # V22.2②：QQQ 正乖离 MA200 阈值，> 20% 触发 HI（降至 1.0 倍纯 QQQ）
+        self.hi_deviation_pct = 0.20
+        self.account_currency = Currency.USD
+        self.state_label = "INIT"
+        self.pending_buy = False
+        self.pending_target_q = 0.0
+        self.pending_target_t = 0.0
+        self.ath_price = 0.0
+        self.days_since_rebal = 0
+        self.risk_off_days = 0
+        self.min_risk_off_days = 2
+
+    def _init_ath_price(self):
+        max_price = 0.0
+        for i in range(1, 253):
+            h = bar_high(
+                symbol=self.contract_QQQ,
+                bar_type=BarType.D1,
+                select=i,
+                session_type=THType.RTH
+            )
+            if h is not None and h > max_price:
+                max_price = h
+        self.ath_price = max_price
+        print("[INIT] ATH初始化完成: " + str(max_price))
+
+    def has_open_orders(self):
+        try:
+            symbols = [self.contract_QQQ, self.contract_TQQQ]
+            for sym in symbols:
+                order_ids = request_orderid(
+                    symbol=sym,
+                    status=[],
+                    start="",
+                    end="",
+                    time_zone=TimeZone.MARKET_TIME_ZONE
+                )
+                if not order_ids:
+                    continue
+                max_check = min(len(order_ids), 30)
+                for i in range(max_check):
+                    oid = order_ids[i]
+                    st = order_status(orderid=oid)
+                    if st == OrderStatus.FILLED_ALL:
+                        continue
+                    if st == OrderStatus.CANCELLED_ALL:
+                        continue
+                    if st == OrderStatus.FAILED:
+                        continue
+                    if st == OrderStatus.DELETED:
+                        continue
+                    msg = "未完成订单: " + oid + ", 状态=" + str(st)
+                    print("[OPEN-ORDER] " + msg)
+                    alert(
+                        title="【策略暂停】存在未完成订单",
+                        content=msg + "；本轮不再触发新交易，等待成交或撤单后再恢复。"
+                    )
+                    return True
+            return False
+        except Exception as e:
+            print("[WARN] 检查未完成订单失败，出于安全考虑本轮不交易")
+            alert(
+                title="【告警】检查未完成订单失败",
+                content="为防止异常下单，本轮已自动跳过。"
+            )
+            return True
+
+    def handle_data(self):
+        if self.has_open_orders():
+            print("[SKIP] 存在未完成订单，本轮不触发信号 / 不下单")
+            return
+
+        close_qqq = bar_close(
+            symbol=self.contract_QQQ,
+            bar_type=BarType.D1,
+            select=1,
+            session_type=THType.RTH
+        )
+        close_tqqq = bar_close(
+            symbol=self.contract_TQQQ,
+            bar_type=BarType.D1,
+            select=1,
+            session_type=THType.RTH
+        )
+        vol_qqq = bar_volume(
+            symbol=self.contract_QQQ,
+            bar_type=BarType.D1,
+            select=1,
+            session_type=THType.RTH
+        )
+        open_qqq = bar_open(
+            symbol=self.contract_QQQ,
+            bar_type=BarType.D1,
+            select=1,
+            session_type=THType.RTH
+        )
+
+        if close_qqq is None or close_tqqq is None:
+            return
+        if close_qqq <= 0 or close_tqqq <= 0:
+            return
+        if open_qqq is None:
+            open_qqq = close_qqq
+
+        if vol_qqq is None:
+            vol_qqq = 0.0
+        self.days_since_rebal = self.days_since_rebal + 1
+
+        if self.state_label == "BEAR_CASH":
+            self.risk_off_days = self.risk_off_days + 1
+        elif self.state_label == "ZONE_BATTLE_DEFEND":
+            self.risk_off_days = self.risk_off_days + 1
+        elif self.state_label == "TOP_ESCAPE":
+            self.risk_off_days = self.risk_off_days + 1
+        else:
+            self.risk_off_days = 0
+
+        if self.pending_buy:
+            print("[T+1] 资金已结算，执行上一交易日的买入计划...")
+            tq_pct = str(int(self.pending_target_q * 100)) + "%"
+            tt_pct = str(int(self.pending_target_t * 100)) + "%"
+            alert(
+                title="【T+1 买入执行】资金已结算",
+                content="根据前一交易日的目标权重，执行买入：QQQ 目标 " + tq_pct + "，TQQQ 目标 " + tt_pct + "。"
+            )
+            self.execute_buy_only(
+                self.pending_target_q,
+                self.pending_target_t,
+                close_qqq,
+                close_tqqq
+            )
+            self.pending_buy = False
+            self.pending_target_q = 0.0
+            self.pending_target_t = 0.0
+            return
+
+        if close_qqq > self.ath_price:
+            self.ath_price = close_qqq
+
+        drawdown = 0.0
+        if self.ath_price > 0:
+            drawdown = (close_qqq / self.ath_price) - 1.0
+
+        ma200 = ma(
+            symbol=self.contract_QQQ,
+            period=self.ma_long_window,
+            bar_type=BarType.D1,
+            data_type=DataType.CLOSE,
+            select=1,
+            session_type=THType.RTH
+        )
+        ma20 = ma(
+            symbol=self.contract_QQQ,
+            period=self.ma_short_window,
+            bar_type=BarType.D1,
+            data_type=DataType.CLOSE,
+            select=1,
+            session_type=THType.RTH
+        )
+        prev_ma20 = ma(
+            symbol=self.contract_QQQ,
+            period=self.ma_short_window,
+            bar_type=BarType.D1,
+            data_type=DataType.CLOSE,
+            select=2,
+            session_type=THType.RTH
+        )
+
+        is_top_signal = False
+        if self.ath_price > 0:
+            if close_qqq >= self.ath_price * self.high_zone:
+                vol_total = 0.0
+                vol_count = 0
+                for i in range(2, self.vol_window + 2):
+                    v = bar_volume(
+                        symbol=self.contract_QQQ,
+                        bar_type=BarType.D1,
+                        select=i,
+                        session_type=THType.RTH
+                    )
+                    if v is not None:
+                        vol_total = vol_total + v
+                        vol_count = vol_count + 1
+                if vol_count >= self.vol_window:
+                    vol_ma = vol_total / float(vol_count)
+                    if vol_qqq > vol_ma * self.vol_factor:
+                        if close_qqq < open_qqq:
+                            is_top_signal = True
+
+        # ── V22.2 特征值 ──
+        above_ma200 = (ma200 is not None and close_qqq > ma200)
+        above_ma20 = (ma20 is not None and close_qqq > ma20)
+        below_ma20 = (ma20 is not None and close_qqq < ma20)
+        ma20_rising = (ma20 is not None and prev_ma20 is not None and ma20 > prev_ma20)
+        ma20_falling = (ma20 is not None and prev_ma20 is not None and ma20 < prev_ma20)
+        is_hi_deviation = (ma200 is not None and ma200 > 0 and close_qqq > ma200 * (1.0 + self.hi_deviation_pct))
+
+        next_state = self.state_label
+
+        # ════════ V22.2②：逃顶后的"解锁"状态机（仅在 HI / HI_CASH 中生效，出场只看 MA20/MA200）════════
+        hi_chain_handled = False
+        if self.state_label == "HI":
+            # 逃顶后持有 QQQ
+            if not above_ma200:
+                # 跌破 MA200 → 落到下面恢复 v22.1 判断
+                pass
+            elif below_ma20 and ma20_falling:
+                # 跌破 MA20 且 MA20 斜率向下 → 卖 QQQ 空仓
+                next_state = "HI_CASH"
+                hi_chain_handled = True
+                print("[HI->CASH] 逃顶后跌破 MA20 且 MA20 向下，卖出 QQQ 空仓")
+            else:
+                # 创新高 / 乖离仍>20% / 仍站 MA20 上方 → 保持逃顶状态（锁住利润）
+                next_state = "HI"
+                hi_chain_handled = True
+        elif self.state_label == "HI_CASH":
+            # 逃顶后空仓
+            if not above_ma200:
+                # 继续下跌跌破 MA200 → 落到下面恢复 v22.1 判断
+                pass
+            elif above_ma20:
+                # 股价上涨站稳 MA20 → 恢复 NORMAL
+                next_state = "NORMAL"
+                hi_chain_handled = True
+                print("[CASH->NORMAL] 逃顶后站稳 MA20，恢复 NORMAL")
+            else:
+                # 仍在 MA20 下方、MA200 上方 → 保持空仓等待
+                next_state = "HI_CASH"
+                hi_chain_handled = True
+
+        if not hi_chain_handled:
+            # ════════ 新触发逃顶 + V22.1 原状态机（below-MA200 加 step① 深坑门槛）════════
+            if is_hi_deviation:
+                # V22.2②：乖离 > 20% 首次触发逃顶（非 HI/HI_CASH 的任何状态都能进；最高优先）
+                next_state = "HI"
+            elif is_top_signal:
+                next_state = "TOP_ESCAPE"
+            elif ma200 is not None and close_qqq < ma200:
+                if drawdown <= -0.30:
+                    # V22.2①：深坑须 MA20 向上才抄底（全仓 TQQQ）；
+                    # MA20 未向上则回退 ZONE_BATTLE_DEFEND（90% QQQ 防守）—— 比"保持原状态"回撤更小。
+                    if ma20_rising:
+                        next_state = "ZONE_DESPAIR_TQQQ"
+                    else:
+                        next_state = "ZONE_BATTLE_DEFEND"
+                elif drawdown <= -0.10:
+                    if ma20 is not None and close_qqq > ma20:
+                        next_state = "ZONE_BATTLE_ATTACK"
+                    else:
+                        next_state = "ZONE_BATTLE_DEFEND"
+                else:
+                    next_state = "BEAR_CASH"
+            else:
+                # 站上 MA200：V22.1 NORMAL/ATTACK 原逻辑（跌破 MA20 也不空仓，维持 NORMAL）
+                if drawdown < -0.10:
+                    next_state = "ZONE_BATTLE_ATTACK"
+                else:
+                    next_state = "NORMAL"
+
+        raw_next_state = next_state
+        risk_off_list = ["BEAR_CASH", "ZONE_BATTLE_DEFEND", "TOP_ESCAPE"]
+        risk_on_list = ["ZONE_BATTLE_ATTACK", "NORMAL"]
+        blocked = False
+        blocked_reasons = []
+
+        if self.state_label in risk_off_list:
+            if raw_next_state in risk_on_list:
+                if self.risk_off_days < self.min_risk_off_days:
+                    blocked = True
+                    blocked_reasons.append("冷静期未满足：已等待 " + str(self.risk_off_days) + " 天，需至少 " + str(self.min_risk_off_days) + " 天")
+                if ma20 is not None and prev_ma20 is not None:
+                    if ma20 <= prev_ma20:
+                        blocked = True
+                        blocked_reasons.append("MA20 斜率仍向下/持平，反弹趋势不明确")
+                else:
+                    blocked = True
+                    blocked_reasons.append("MA20 数据不足，暂不确认反弹趋势")
+
+        if blocked:
+            next_state = self.state_label
+            reason_text = "；".join(blocked_reasons)
+            alert(
+                title="【反转过滤】延迟恢复进攻/常态",
+                content="原始信号建议从 " + self.state_label + " 切换到 " + raw_next_state + "，但触发以下过滤条件：" + reason_text + "。本次保持原状态不加仓，仅观察。"
+            )
+
+        tg_q = 0.0
+        tg_t = 0.0
+        if next_state == "ZONE_DESPAIR_TQQQ":
+            tg_q = 0.0
+            tg_t = 0.99
+        elif next_state == "ZONE_BATTLE_ATTACK":
+            tg_q = 0.0
+            tg_t = 0.99
+        elif next_state == "ZONE_BATTLE_DEFEND":
+            tg_q = 0.90
+            tg_t = 0.0
+        elif next_state == "BEAR_CASH":
+            tg_q = 0.0
+            tg_t = 0.0
+        elif next_state == "TOP_ESCAPE":
+            tg_q = 0.90
+            tg_t = 0.0
+        elif next_state == "HI":
+            tg_q = 1.0   # V22.2②：降至 1.0 倍纯 QQQ —— QQQ 100% / TQQQ 0%
+            tg_t = 0.0
+        elif next_state == "HI_CASH":
+            tg_q = 0.0   # V22.2②：逃顶后跌破 MA20 → 100% 现金空仓
+            tg_t = 0.0
+        elif next_state == "NORMAL":
+            tg_q = 0.0    # V22.3：NORMAL 改为只持 90% TQQQ（其余 10% 现金），追求更高回报
+            tg_t = 0.90
+
+        self.process_trading(
+            next_state,
+            tg_q,
+            tg_t,
+            close_qqq,
+            close_tqqq,
+            drawdown,
+            ma200,
+            ma20,
+            is_top_signal
+        )
+
+    def _get_holding_qty(self, symbol):
+        try:
+            qty = position_holding_qty(symbol=symbol)
+            if qty is None:
+                return 0
+            return int(qty)
+        except Exception as e:
+            print("[WARN] 获取持仓数量失败")
+            alert(
+                title="【告警】获取持仓数量失败",
+                content="将按 0 股处理本次调仓。"
+            )
+            return 0
+
+    def _get_available_qty(self, symbol):
+        try:
+            qty = available_qty(symbol=symbol)
+            if qty is None:
+                return 0
+            return int(qty)
+        except Exception as e:
+            print("[WARN] 获取可用数量失败")
+            return 0
+
+    def _get_position_value(self, symbol, price):
+        try:
+            val = position_market_cap(symbol=symbol)
+            if val is not None:
+                return float(val)
+        except Exception as e:
+            print("[WARN] 获取持仓市值失败，将用数量*价格估算")
+            alert(
+                title="【提示】获取持仓市值失败，改用数量×价格估算",
+                content="继续执行调仓逻辑。"
+            )
+        qty = self._get_holding_qty(symbol)
+        if price is None:
+            price = 0.0
+        return float(qty) * float(price)
+
+    def _build_state_reason(self, prev_state, next_state, drawdown, ma200, ma20, price_q, is_top_signal):
+        dd = drawdown
+        if dd is None:
+            dd = 0.0
+        dd_int = int(dd * 100)
+        dd_pct = str(dd_int) + "%"
+
+        if next_state == "TOP_ESCAPE":
+            return "QQQ 接近历史高点区域，并出现放量长阴线，判定为高位风险释放，执行逃顶减仓。"
+
+        if next_state == "HI":
+            dev_pct = "N/A"
+            if ma200 is not None and ma200 > 0:
+                dev_int = int(((price_q / ma200) - 1.0) * 100)
+                dev_pct = str(dev_int) + "%"
+            return "QQQ 价格高于 MA200 超过 20%（正乖离 " + dev_pct + "），正乖离率过大，触发预警性去杠杆，降至 1.0 倍纯 QQQ 安全防御。目标杠杆：QQQ 100%，TQQQ 0%。"
+
+        if next_state == "HI_CASH":
+            return "逃顶后 QQQ 已跌破 MA20 且 MA20 斜率向下，回调启动，卖出 QQQ 转 100% 现金空仓，等待站稳 MA20 恢复或跌破 MA200 转入常规判断。"
+
+        if next_state == "ZONE_DESPAIR_TQQQ":
+            return "QQQ 距离历史高点回撤约 " + dd_pct + "（≤ -30%），且 MA20 已转头向上确认企稳，判定为深坑反转点，采用 TQQQ 进攻博弈反弹。"
+
+        if next_state == "ZONE_BATTLE_ATTACK":
+            if ma200 is not None and price_q < ma200:
+                return "QQQ 跌破 MA200，回撤在 -10% ~ -30% 区间，且价格站上 MA20，进入熊市拉锯战进攻模式（TQQQ 进攻）。"
+            else:
+                return "QQQ 仍未完全修复，回撤约 " + dd_pct + "，策略继续保持进攻仓位。"
+
+        if next_state == "ZONE_BATTLE_DEFEND":
+            if dd <= -0.30:
+                # 深坑回退：回撤已≤-30%，但 MA20 尚未转头向上，不急于全仓抄底，先用 QQQ 防守
+                return "QQQ 跌破 MA200 且回撤约 " + dd_pct + "（已≤ -30%），但 MA20 尚未转头向上、企稳未确认，暂用 QQQ 防守等待，不急于深坑全仓抄底。"
+            return "QQQ 跌破 MA200，回撤在 -10% ~ -30% 区间，但价格未站上 MA20，优先用 QQQ 防守等待企稳。"
+
+        if next_state == "BEAR_CASH":
+            return "QQQ 跌破 MA200，回撤不足 10%，疑似熊市陷阱区，暂时空仓观望，等待更极端或更清晰信号。"
+
+        if next_state == "NORMAL":
+            # 按真实触发信号措辞，避免误导：不同来源状态，恢复 NORMAL 的真实信号不同
+            if prev_state == "HI_CASH":
+                # 一直在 MA200 上方，真实触发是"站上 MA20"，不是站上 MA200
+                return "高位去杠杆空仓后，QQQ 重新站上 MA20、确认高位回调结束，恢复常态进攻配置（90% TQQQ + 10% 现金）。"
+            if prev_state in ["BEAR_CASH", "ZONE_BATTLE_DEFEND", "ZONE_BATTLE_ATTACK", "ZONE_DESPAIR_TQQQ"]:
+                # 这些是跌破 MA200 的熊市/拉锯状态，真实触发是"重新站上 MA200"
+                return "QQQ 重新站上 MA200、结束熊市/拉锯阶段，恢复常态进攻配置（90% TQQQ + 10% 现金）。"
+            if prev_state == "TOP_ESCAPE":
+                return "高位逃顶防御解除，QQQ 回归常态区间，恢复常态进攻配置（90% TQQQ + 10% 现金）。"
+            return "QQQ 处于 MA200 上方常态区间，维持常态进攻配置（90% TQQQ + 10% 现金）。"
+
+        return "策略初始化或特殊状态，按预设权重进行配置。"
+
+    def process_trading(self, next_state, tg_q, tg_t, p_q, p_t,
+                        drawdown, ma200, ma20, is_top_signal):
+        need_action = False
+        prev_state = self.state_label
+
+        if next_state != prev_state:
+            print("[SIGNAL] 状态切换: " + prev_state + " -> " + next_state)
+            self.state_label = next_state
+            need_action = True
+            self.days_since_rebal = 0
+
+            reason = self._build_state_reason(prev_state, next_state, drawdown, ma200, ma20, p_q, is_top_signal)
+            tq_pct = str(int(tg_q * 100)) + "%"
+            tt_pct = str(int(tg_t * 100)) + "%"
+            alert(
+                title="【信号触发】状态 " + prev_state + " → " + next_state,
+                content=reason + " 目标仓位：QQQ " + tq_pct + "，TQQQ " + tt_pct + "。"
+            )
+
+        elif next_state == "NORMAL" and tg_q > 0.0 and tg_t > 0.0:
+            # V22.3：仅当 NORMAL 为双资产(QQQ+TQQQ)时才做市值偏离再平衡维护。
+            # 本版 NORMAL 已改为单一 90% TQQQ(tg_q=0)，此块不再触发，避免 val_q=0 导致每根K线误触发再平衡。
+            val_q = self._get_position_value(self.contract_QQQ, p_q)
+            val_t = self._get_position_value(self.contract_TQQQ, p_t)
+            total = val_q + val_t
+            if total > 0:
+                deviation = abs(val_q - val_t) / (total + 0.000001)
+                if deviation > 0.20:
+                    dev_int = int(deviation * 100)
+                    dev_pct = str(dev_int) + "%"
+                    print("[MAINTAIN] 常态偏差 " + dev_pct + "，触发再平衡")
+                    need_action = True
+                    alert(
+                        title="【再平衡触发】NORMAL 状态偏离",
+                        content="当前 QQQ/TQQQ 市值偏离约 " + dev_pct + "，超过 20% 阈值，执行再平衡。"
+                    )
+
+        if not need_action:
+            return
+
+        equity = net_asset(currency=self.account_currency)
+        if equity is None or equity <= 0:
+            print("[WARN] 账户净值异常，终止本轮调仓")
+            alert(
+                title="【告警】账户净值异常",
+                content="当前净资产数值异常，本轮调仓已自动终止，请检查账户状态。"
+            )
+            return
+
+        target_val_q = equity * tg_q
+        target_val_t = equity * tg_t
+        curr_val_q = self._get_position_value(self.contract_QQQ, p_q)
+        curr_val_t = self._get_position_value(self.contract_TQQQ, p_t)
+        diff_q = target_val_q - curr_val_q
+        diff_t = target_val_t - curr_val_t
+        min_tr = 500.0
+        sold = False
+
+        if diff_q < (0.0 - min_tr) and p_q > 0:
+            need_sell_val = abs(diff_q)
+            avail_qty_q = self._get_available_qty(self.contract_QQQ)
+            qty_q = int(need_sell_val / p_q)
+            # 全退出守卫(2026-08-21): 目标为 0 的全退出直接清光可用持仓, 防 int 除法浮点截断剩 1 股。
+            if target_val_q <= 0.0:
+                qty_q = avail_qty_q
+            if qty_q > avail_qty_q:
+                qty_q = avail_qty_q
+            if qty_q > 0:
+                place_market(
+                    symbol=self.contract_QQQ,
+                    qty=qty_q,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                sell_val_int = int(need_sell_val)
+                print("[SELL] QQQ: " + str(qty_q))
+                alert(
+                    title="【卖出执行】QQQ",
+                    content="状态：" + self.state_label + "，计划卖出 QQQ " + str(qty_q) + " 股，目标价值约 " + str(sell_val_int) + " 美元，用于向目标仓位过渡。"
+                )
+                sold = True
+
+        if diff_t < (0.0 - min_tr) and p_t > 0:
+            need_sell_val = abs(diff_t)
+            avail_qty_t = self._get_available_qty(self.contract_TQQQ)
+            qty_t = int(need_sell_val / p_t)
+            # 全退出守卫(2026-08-21): 目标为 0 的全退出直接清光可用持仓, 防 int 除法浮点截断剩 1 股。
+            if target_val_t <= 0.0:
+                qty_t = avail_qty_t
+            if qty_t > avail_qty_t:
+                qty_t = avail_qty_t
+            if qty_t > 0:
+                place_market(
+                    symbol=self.contract_TQQQ,
+                    qty=qty_t,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                sell_val_int = int(need_sell_val)
+                print("[SELL] TQQQ: " + str(qty_t))
+                alert(
+                    title="【卖出执行】TQQQ",
+                    content="状态：" + self.state_label + "，计划卖出 TQQQ " + str(qty_t) + " 股，目标价值约 " + str(sell_val_int) + " 美元，用于向目标仓位过渡。"
+                )
+                sold = True
+
+        if sold:
+            self.pending_buy = True
+            self.pending_target_q = tg_q
+            self.pending_target_t = tg_t
+            tq_pct = str(int(tg_q * 100)) + "%"
+            tt_pct = str(int(tg_t * 100)) + "%"
+            print("[T+1] 卖出已提交，等待下一交易日按目标权重买入")
+            alert(
+                title="【T+1 模式启动】今日只卖不买",
+                content="已完成卖出指令，等待资金结算。下一交易日将按目标权重买入：QQQ " + tq_pct + "，TQQQ " + tt_pct + "。"
+            )
+            return
+
+        self.execute_buy_only(tg_q, tg_t, p_q, p_t)
+
+    def execute_buy_only(self, tg_q, tg_t, p_q, p_t):
+        equity = net_asset(currency=self.account_currency)
+        if equity is None or equity <= 0:
+            print("[WARN] 账户净值异常，跳过买入")
+            alert(
+                title="【告警】账户净值异常，买入跳过",
+                content="当前净资产数值异常，为了避免错误下单，本次买入操作已跳过。"
+            )
+            return
+
+        curr_val_q = self._get_position_value(self.contract_QQQ, p_q)
+        curr_val_t = self._get_position_value(self.contract_TQQQ, p_t)
+        target_val_q = equity * tg_q
+        target_val_t = equity * tg_t
+        need_val_q = target_val_q - curr_val_q
+        need_val_t = target_val_t - curr_val_t
+
+        if need_val_q < 0.0:
+            need_val_q = 0.0
+        if need_val_t < 0.0:
+            need_val_t = 0.0
+
+        if need_val_q <= 500.0 and need_val_t <= 500.0:
+            return
+
+        if need_val_q > 500.0 and p_q > 0:
+            need_qty_q = int(need_val_q / p_q)
+            if need_qty_q > 0:
+                cash_qty_q = max_qty_to_buy_on_cash(
+                    symbol=self.contract_QQQ,
+                    order_type=OrdType.MKT,
+                    price=0,
+                    order_trade_session_type=TSType.RTH
+                )
+                if cash_qty_q is None:
+                    cash_qty_q = 0
+                buy_qty_q = need_qty_q
+                if buy_qty_q > int(cash_qty_q):
+                    buy_qty_q = int(cash_qty_q)
+                if buy_qty_q > 0:
+                    place_market(
+                        symbol=self.contract_QQQ,
+                        qty=buy_qty_q,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    print("[BUY] QQQ: " + str(buy_qty_q))
+                    alert(
+                        title="【买入执行】QQQ（现金约束）",
+                        content="根据目标权重需要买入约 " + str(need_qty_q) + " 股，受现金约束实际买入 " + str(buy_qty_q) + " 股。"
+                    )
+
+        if need_val_t > 500.0 and p_t > 0:
+            need_qty_t = int(need_val_t / p_t)
+            if need_qty_t > 0:
+                cash_qty_t = max_qty_to_buy_on_cash(
+                    symbol=self.contract_TQQQ,
+                    order_type=OrdType.MKT,
+                    price=0,
+                    order_trade_session_type=TSType.RTH
+                )
+                if cash_qty_t is None:
+                    cash_qty_t = 0
+                buy_qty_t = need_qty_t
+                if buy_qty_t > int(cash_qty_t):
+                    buy_qty_t = int(cash_qty_t)
+                if buy_qty_t > 0:
+                    place_market(
+                        symbol=self.contract_TQQQ,
+                        qty=buy_qty_t,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    print("[BUY] TQQQ: " + str(buy_qty_t))
+                    alert(
+                        title="【买入执行】TQQQ（现金约束）",
+                        content="根据目标权重需要买入约 " + str(need_qty_t) + " 股，受现金约束实际买入 " + str(buy_qty_t) + " 股。"
+                    )
+
+# ═══════════════════════════════════════════════════════════════
+#  📺 更多量化策略教程: youtube.com/@wealthplantations
+#  🎁 获取最新版代码: aiyuan.ai/strategy/nazhi-siji
+#  © 2026 园园AI - CC BY-NC 4.0
+# ═══════════════════════════════════════════════════════════════

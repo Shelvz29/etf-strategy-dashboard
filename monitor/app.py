@@ -26,6 +26,7 @@ h1 {font-size:2.05rem!important;letter-spacing:-.035em;}
 def history_table(rows, profile=None):
     base = core.base_symbol(profile)
     data = pd.DataFrame(rows)
+    data["symbol"] = [core.target_text(row) if "weight_QQQ" in row else row["symbol"] for row in rows]
     data["state"] = data["state"].map(lambda code: core.state_name(code, profile))
     data["regime"] = data["regime"].map({"BULL": "偏牛", "BEAR": "偏熊"})
     data["weight"] = data["weight"].map(lambda x: f"{core.percent(x)}")
@@ -96,18 +97,22 @@ def dashboard():
         next_session = cal.next_session(last["date"])
         execute_open = cal.session_open(next_session)
         cols = st.columns(4)
-        cols[0].metric("收盘目标 · ETF参考", "现金" if last["symbol"] == "CASH" else last["symbol"])
+        cols[0].metric("收盘目标 · ETF参考", "QQQ + TQQQ" if last["symbol"] == "MIX" else "现金" if last["symbol"] == "CASH" else last["symbol"])
         cols[1].metric("目标资金比例", f"{core.percent(last['weight'])}")
         cols[2].metric("策略状态", core.state_name(last["state"], profile))
         cols[3].metric("QQQ市场环境", "偏牛" if last["regime"] == "BULL" else "偏熊")
         st.caption(f"信号日 {last['date']}（美东）→ 对应执行开盘（北京）{core.display_time(execute_open.isoformat())}。相同目标不要求每天重新配平；现金比例 {core.percent(1-last['weight'])}。")
         st.caption("仓位比例以你分配给本策略的资金为基准。")
+        if "weight_QQQ" in last:
+            st.info("分项目标：" + core.target_text(last))
         mapping = core.product_mappings()
-        product = mapping.get(last["symbol"], {})
-        if last["symbol"] != "CASH" and product.get("status") != "已确认可买卖":
-            st.info(f"{last['symbol']} 的币安产品对应关系尚未确认。请在“设置与说明”填写实际产品；没有对应产品时，本策略无法原样执行。")
-        elif product.get("name"):
-            st.caption(f"你的币安产品记录：{product['name']}。价格和交易时段请以币安页面为准。")
+        target_symbols = [s for s in ("QQQ", "TQQQ") if last.get("weight_" + s, 0) > 0] if "weight_QQQ" in last else [last["symbol"]]
+        for target_symbol in target_symbols:
+            product = mapping.get(target_symbol, {})
+            if target_symbol != "CASH" and product.get("status") != "已确认可买卖":
+                st.info(f"{target_symbol} 的币安产品对应关系尚未确认。请在“设置与说明”填写实际产品；没有对应产品时，本策略无法原样执行。")
+            elif product.get("name"):
+                st.caption(f"你的币安产品记录：{product['name']}。价格和交易时段请以币安页面为准。")
 
         quotes = core.get("quotes", {"data": snap.get("quotes", {})})
         qcols = st.columns(3)
@@ -125,7 +130,7 @@ def dashboard():
             age = (pd.Timestamp.now(tz="UTC") - pd.Timestamp(preview["generated"])).total_seconds()
             if age <= 600:
                 p = preview["last"]
-                st.info(f"盘中预估（未确认）：{p['symbol']} {core.percent(p['weight'])} · {core.state_name(p['state'], profile)}。日线尚未收盘，预估不产生调仓提醒。")
+                st.info(f"盘中预估（未确认）：{core.target_text(p)} · {core.state_name(p['state'], profile)}。日线尚未收盘，预估不产生调仓提醒。")
             else:
                 st.warning("盘中预估已过期，请等待行情更新。收盘确认目标保持不变。")
         elif clock["is_open"]:
@@ -167,14 +172,14 @@ def dashboard():
         st.subheader("执行确认")
         ack = core.get("execution_ack")
         if ack:
-            matches = (ack["symbol"] == last["symbol"] and abs(ack["weight"] - last["weight"]) < 1e-9
+            matches = (not core.target_changed(ack, last)
                        and ack.get("strategy_fingerprint", core.default_strategy()["fingerprint"]) == profile["fingerprint"])
-            st.write(f"上次手动确认：{ack['date']} 信号 → {ack['symbol']} {core.percent(ack['weight'])}，记录时间（北京）{core.display_time(ack['time'])}。")
+            st.write(f"上次手动确认：{ack['date']} 信号 → {core.target_text(ack)}，记录时间（北京）{core.display_time(ack['time'])}。")
             (st.success if matches else st.warning)("已记录的目标与当前策略版本一致。" if matches else "当前目标或策略版本与上次确认不同，请核对实际持仓。")
         else:
             st.info("尚未记录执行确认；系统无法读取你的币安持仓。")
         if st.button("记录：我已核对并处理当前目标", key="ack", disabled=not current):
-            core.put("execution_ack", {"date": last["date"], "symbol": last["symbol"], "weight": last["weight"], "time": core.iso_now(), "strategy_fingerprint": profile["fingerprint"], "strategy_name": profile["name"]})
+            core.put("execution_ack", {"date": last["date"], "symbol": last["symbol"], "weight": last["weight"], "time": core.iso_now(), "strategy_fingerprint": profile["fingerprint"], "strategy_name": profile["name"], **{k:last[k] for k in ("weight_QQQ", "weight_TQQQ") if k in last}})
             st.toast("执行确认已保存。这是你的手动记录，不代表系统核验了成交。")
             st.rerun()
         st.caption("此按钮仅登记你的确认，不会提交订单，也不会自动计算币安持仓。")
@@ -182,7 +187,7 @@ def dashboard():
         with st.form("trade", clear_on_submit=True):
             a, b, c = st.columns(3)
             trade_date = a.date_input("成交日期（北京）", date.today())
-            reference = b.selectbox("策略参考ETF", ["SOXL", "XSD", "SMH", "SOXX"])
+            reference = b.selectbox("策略参考ETF", ["SOXL", "XSD", "SMH", "SOXX", "QQQ", "TQQQ"])
             side = c.selectbox("成交方向", ["买入", "卖出"])
             product_name = st.text_input("实际成交的币安产品名称", placeholder="填写页面显示的完整名称 / 交易对")
             a, b, c, d = st.columns(4)
@@ -220,7 +225,7 @@ def dashboard():
         products = core.product_mappings()
         with st.form("products"):
             values = {}
-            for sym in ("SOXL", "XSD", "SMH", "SOXX"):
+            for sym in core.DEFAULT_PRODUCTS:
                 prior = products.get(sym, {})
                 a, b = st.columns([3, 2])
                 name = a.text_input(f"{sym} 对应的币安产品完整名称", value=prior.get("name", ""))

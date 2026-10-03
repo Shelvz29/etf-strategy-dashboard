@@ -64,6 +64,8 @@ monitor：本地看板、后台收盘监测、Windows提醒、手动执行记录
 策略编辑提供矩形状态框，可编辑名称和解释、添加或移除说明、从代码读取，并随代码版本保存和恢复。
 启用后名称、目标、图例和状态说明同步变化；内置组合策略始终保留。
 monitor/strategies包含SMH和SOXL、SOXX和SOXL及MACD＋4%急跌避险的完整Python代码，可直接粘贴到策略编辑器。
+另含QQQ和TQQQ双核V22.1、纳指四季V22.3的日线适配版；原文件及CC BY-NC署名在third_party/moomoo。
+两份适配策略支持双资产目标，成交口径和原moomoo的账户执行差异请看README.md。
 这些策略已经保存，可在策略编辑和历史回测中选择；当前盯盘策略保持用户原来的选择。
 MACD＋4%急跌避险使用SMH MACD柱线<0且昨收至最低跌幅≥4%，现金等待5交易日，再按MACD/EMA20恢复条件解除。
 它包含基础八种状态和三种现金避险状态，不包含部分止盈或分批买回。
@@ -91,7 +93,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\monitor\\remove-start
 “包内容清单.json”列出包内文件的SHA-256及数据库备份信息。
 压缩包旁的.sha256文件用于验证整个压缩包。
 如果需要验证源码，首次安装后在monitor目录执行：
-..\\.venv\\Scripts\\python.exe -m unittest test_monitor test_performance test_strategies test_macd_risk -v
+..\\.venv\\Scripts\\python.exe -m unittest test_monitor test_performance test_strategies test_macd_risk test_moomoo -v
 原始研究的运行方式见backtests/2026-10-02-xsd-soxl/README.md。
 
 五、运行约定
@@ -144,6 +146,10 @@ def main():
         package = working_path / NAME
         package.mkdir()
         copy_sources(ROOT / "monitor", package / "monitor", skip_runtime=True)
+        copy_sources(ROOT / "third_party", package / "third_party")
+        for document in ("README.md", "LICENSE", "CHANGELOG.md"):
+            if (ROOT / document).exists():
+                shutil.copy2(ROOT / document, package / document)
         copy_sources(ROOT / RESEARCH, package / RESEARCH)
         # Minimal frozen evidence needed by the added standalone-strategy test
         # and generator; avoid requiring the large exploratory curve sets.
@@ -217,7 +223,7 @@ def main():
         script_check = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(check_file), "-Source", str(relocated / "install.ps1")], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
         if script_check.returncode:
             raise RuntimeError(script_check.stdout + script_check.stderr)
-        checks = subprocess.run([str(ROOT / ".venv" / "Scripts" / "python.exe"), "-m", "unittest", "test_monitor", "test_performance", "test_strategies", "test_macd_risk", "-q"],
+        checks = subprocess.run([str(ROOT / ".venv" / "Scripts" / "python.exe"), "-m", "unittest", "test_monitor", "test_performance", "test_strategies", "test_macd_risk", "test_moomoo", "-q"],
                                 cwd=relocated / "monitor", capture_output=True, text=True, encoding="utf-8", errors="replace")
         if checks.returncode:
             raise RuntimeError(checks.stdout + checks.stderr)

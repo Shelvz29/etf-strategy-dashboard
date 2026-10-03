@@ -36,7 +36,7 @@ def strategy_card_report(bundle, cutoff, profile):
     # Only the actual input instruments matter; extra comparison ETFs should not
     # invalidate unrelated cards. Hash payloads before the cache boundary so that
     # a same-day corrected price, code revision or name change is reflected.
-    required = tuple(dict.fromkeys([*core.TICKERS, core.base_symbol(profile)]))
+    required = tuple(dict.fromkeys([*core.TICKERS, *core.strategy_tickers(profile)]))
     resolved = {symbol: resolved[symbol] for symbol in required}
     version = hashlib.sha256(core.json_dump(resolved).encode()).hexdigest() + profile["fingerprint"]
     return card_report(version, cutoff, resolved, profile)

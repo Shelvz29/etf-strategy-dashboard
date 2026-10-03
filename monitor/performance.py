@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 import core
+import portfolio
 
 BENCHMARKS = ("TQQQ", "QQQ", "XSD", "SMH", "VGT", "SOXX", "SOXL")
 STRATEGY = core.STRATEGY_NAME
@@ -165,7 +166,8 @@ def window(index, label, start=None, end=None):
 
 
 def full_strategy(frames, signals, cost_bps=10.0):
-    nav, _ = engine.simulate(frames, signals, start=str(FIRST_TRADE.date()),
+    simulator = portfolio if "weight_QQQ" in signals else engine
+    nav, _ = simulator.simulate(frames, signals, start=str(FIRST_TRADE.date()),
                              end=str(signals.index[-1].date()), cost_bps=cost_bps,
                              initial=100_000.0, execution="next_open", daily_rebalance=False)
     return nav.equity / 100_000.0
@@ -210,7 +212,8 @@ def compare_window(frames, signals, full, selected, win, mode=CONTINUOUS, cost_b
         capital = float(full.loc[win.baseline]) if win.baseline is not None else 1.0
         cut = full.loc[win.first:win.end]
     else:
-        nav, _ = engine.simulate(frames, signals, start=str(win.first.date()), end=str(win.end.date()),
+        simulator = portfolio if "weight_QQQ" in signals else engine
+        nav, _ = simulator.simulate(frames, signals, start=str(win.first.date()), end=str(win.end.date()),
                                  cost_bps=cost_bps, initial=100_000.0, execution="next_open", daily_rebalance=False)
         cut, capital = nav.equity / 100_000.0, 1.0
     name = signals.attrs.get("strategy", {}).get("name", STRATEGY)

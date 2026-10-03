@@ -34,6 +34,8 @@ DEFAULT_PRODUCTS = {
     "XSD": {"name": "State Street SPDR S&P Semiconductor ETF", "status": "已确认可买卖"},
     "SMH": {"name": "", "status": "未确认"},
     "SOXX": {"name": "", "status": "未确认"},
+    "QQQ": {"name": "", "status": "未确认"},
+    "TQQQ": {"name": "", "status": "未确认"},
 }
 STATE_NAMES = {
     "TOP_DEFENSE": "高位放量防御", "PULLBACK_ATTACK": "回撤进攻",
@@ -199,27 +201,30 @@ def base_symbol(profile=None):
 
 
 def strategy_tickers(profile=None):
-    return ("QQQ", base_symbol(profile), "SOXL")
+    return ("QQQ", "TQQQ") if base_symbol(profile) == "QQQ" else ("QQQ", base_symbol(profile), "SOXL")
 
 
 def fetch_tickers(profile=None):
-    return tuple(dict.fromkeys([*TICKERS, base_symbol(profile)]))
+    return tuple(dict.fromkeys([*TICKERS, *strategy_tickers(profile)]))
 
 
 def ensure_strategy_bundle(bundle, cutoff, profile):
     """Capture required extra prices without changing the confirmed monitor."""
-    symbol = base_symbol(profile)
-    if symbol in bundle:
+    missing = tuple(dict.fromkeys(s for s in strategy_tickers(profile) if s not in bundle))
+    if not missing:
         return bundle
     from performance import extra_prices
-    frames, errors, _ = extra_prices((symbol,), cutoff)
-    if symbol not in frames:
-        raise ValueError(f"{symbol}策略行情未就绪：{errors.get(symbol, '缺少完整日线')}")
-    with connect() as db:
-        row = db.execute("SELECT payload FROM comparison_prices WHERE symbol=?", (symbol,)).fetchone()
-    if not row:
-        raise ValueError(f"{symbol}历史行情尚未缓存。")
-    return {**bundle, symbol: json.loads(row[0])}
+    frames, errors, _ = extra_prices(missing, cutoff)
+    resolved = dict(bundle)
+    for symbol in missing:
+        if symbol not in frames:
+            raise ValueError(f"{symbol}策略行情未就绪：{errors.get(symbol, '缺少完整日线')}")
+        with connect() as db:
+            row = db.execute("SELECT payload FROM comparison_prices WHERE symbol=?", (symbol,)).fetchone()
+        if not row:
+            raise ValueError(f"{symbol}历史行情尚未缓存。")
+        resolved[symbol] = json.loads(row[0])
+    return resolved
 
 
 def strategy_frames(frames, profile):
@@ -228,7 +233,7 @@ def strategy_frames(frames, profile):
         return frames
     required = strategy_tickers(profile)
     if any(s not in frames for s in required):
-        raise ValueError(f"{symbol}策略需要QQQ、{symbol}、SOXL的日线。")
+        raise ValueError("策略需要" + "、".join(required) + "的完整日线。")
     # Trim only the differing history start, never discard a missing interior day.
     cutoff = str(frames[symbol].index[-1].date())
     validate_sessions({s: frames[s] for s in required}, cutoff)
@@ -359,7 +364,7 @@ def events(limit=100):
 
 
 def add_trade(trade_date, reference, product, side, quantity, price, fee, currency, notes):
-    if reference not in ("XSD", "SMH", "SOXX", "SOXL") or side not in ("买入", "卖出"):
+    if reference not in ("XSD", "SMH", "SOXX", "SOXL", "QQQ", "TQQQ") or side not in ("买入", "卖出"):
         raise ValueError("请选择有效的参考标的和成交方向")
     if not product.strip():
         raise ValueError("请填写实际成交的币安产品名称")
@@ -511,9 +516,9 @@ def load_bundle(bundle, cutoff):
         for sym, payload in bundle.items():
             Path(temp, sym + ".json").write_text(json_dump(slice_payload(payload, cutoff)), encoding="utf-8")
         frames, _ = baseline.load_data(Path(temp))
-    if any(s in bundle for s in ("SMH", "SOXX")):
+    if any(s in bundle for s in ("SMH", "SOXX", "TQQQ")):
         from performance import parse_price
-        for symbol in ("SMH", "SOXX"):
+        for symbol in ("SMH", "SOXX", "TQQQ"):
             if symbol in bundle:
                 frames[symbol] = parse_price(symbol, bundle[symbol], cutoff)
     return frames
@@ -547,6 +552,15 @@ def bootstrap():
             activate_strategy(profile["id"], profile["revision"])
         return
     clock = market_clock()
+    if not all((FROZEN / "data" / f"{sym}.json").exists() for sym in TICKERS):
+        bundle = fetch_bundle(True, cutoff=clock["expected_date"], profile=profile)
+        frames = load_bundle(bundle, clock["expected_date"])
+        validate_sessions(frames, clock["expected_date"])
+        signals = replay(frames, profile)
+        put("confirmed_bundle", bundle)
+        put("snapshot", pack(frames, signals, "Yahoo 公开日线", iso_now(), quote_meta(bundle), profile))
+        put("preview", None)
+        return
     bundle = {sym: json.loads((FROZEN / "data" / f"{sym}.json").read_text(encoding="utf-8")) for sym in TICKERS}
     frames = load_bundle(bundle, clock["expected_date"])
     signals = replay(frames, profile)
@@ -558,7 +572,14 @@ def bootstrap():
 
 def target_changed(previous, current):
     return previous is not None and (previous["symbol"] != current["symbol"] or
-                                    abs(previous["weight"] - current["weight"]) > 1e-9)
+                                    abs(previous["weight"] - current["weight"]) > 1e-9 or
+                                    any(abs(previous.get(k, 0) - current.get(k, 0)) > 1e-9 for k in ("weight_QQQ", "weight_TQQQ")))
+
+
+def target_text(row):
+    if "weight_QQQ" in row:
+        return " / ".join(f"{s} {percent(row['weight_' + s])}" for s in ("QQQ", "TQQQ") if row['weight_' + s] > 0) or "现金 100%"
+    return f"{row['symbol']} {percent(row['weight'])}"
 
 
 def notify(title, message):
@@ -596,7 +617,7 @@ def commit_confirmed(frames, bundle, fetched, profile=None):
             db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (key, json_dump(value)))
     change = target_changed(old, current)
     if change:
-        title = f"收盘目标变化：{current['symbol']} {percent(current['weight'])}"
+        title = f"收盘目标变化：{target_text(current)}"
         message = (f"{profile['name']} · v{profile['revision']}：{current['date']} 美股收盘确认，{state_name(current['state'], profile)}。"
                    "请核对币安对应产品后手动处理；同一目标不要求每日调仓。")
         kind = "调仓提醒"
@@ -606,7 +627,7 @@ def commit_confirmed(frames, bundle, fetched, profile=None):
         title = f"收盘已确认：{current['symbol']} {percent(current['weight'])}"
         message = f"{profile['name']} · v{profile['revision']}：{current['date']}，{state_name(current['state'], profile)}。目标未变，无新增调仓提醒。"
         kind = "收盘确认"
-    identity = f"close:{profile['fingerprint']}:{current['date']}:{current['symbol']}:{current['weight']}"
+    identity = f"close:{profile['fingerprint']}:{current['date']}:{target_text(current)}"
     if event(kind, title, message, identity) and change:
         notify(title, message)
     return snap

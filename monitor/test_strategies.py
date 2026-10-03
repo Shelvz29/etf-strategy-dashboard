@@ -565,7 +565,7 @@ class StrategyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             core.replay(missing, profile)
         with self.assertRaises(ValueError):
-            core.make_strategy("无效信号ETF", code=profile["code"].replace("BASE_SYMBOL = 'SOXX'", "BASE_SYMBOL = 'QQQ'"))
+            core.make_strategy("无效信号ETF", code=profile["code"].replace("BASE_SYMBOL = 'SOXX'", "BASE_SYMBOL = 'VGT'"))
 
     def test_replacement_intraday_preview_and_daily_fetch_use_new_base(self):
         from export_strategies import replacement_code

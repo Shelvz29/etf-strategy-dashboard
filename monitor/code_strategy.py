@@ -20,7 +20,8 @@ FORBIDDEN_NAMES = {"open", "exec", "eval", "compile", "getattr", "setattr", "del
 FORBIDDEN_ATTRIBUTES = {"load", "save", "savez", "savez_compressed", "loadtxt", "savetxt", "fromfile", "tofile", "memmap", "frombuffer", "ctypes", "ctypeslib", "ffi", "to_csv", "to_json", "to_pickle", "to_excel", "to_sql", "to_parquet", "to_feather", "to_hdf", "to_html", "to_clipboard", "to_xml", "to_markdown", "query", "eval", "plot", "show", "style"}
 REQUIRED = ("regime", "regime_switch", "state", "symbol", "weight", "reason", "xsd_close", "xsd_annual", "xsd_ma20", "qqq_close", "qqq_annual", "anchored_peak", "peak_drawdown", "volume_multiple", "top_trigger", "top_locked")
 TIMEOUT = 30
-BASE_SYMBOLS = ("XSD", "SMH", "SOXX")
+BASE_SYMBOLS = ("XSD", "SMH", "SOXX", "QQQ")
+PORTFOLIO_COLUMNS = ("weight_QQQ", "weight_TQQQ", "rebalance_band")
 
 
 def template(profile, baseline, base_symbol="XSD"):
@@ -77,7 +78,7 @@ def check_source(code):
                     except (ValueError, TypeError, SyntaxError) as exc:
                         raise ValueError(f"{target.id}须直接填写常量，不能动态计算。") from exc
     if metadata.get("BASE_SYMBOL", "XSD") not in BASE_SYMBOLS:
-        raise ValueError("BASE_SYMBOL仅支持XSD、SMH、SOXX。")
+        raise ValueError("BASE_SYMBOL仅支持XSD、SMH、SOXX、QQQ。")
     for field, limit in (("STATE_LABELS", 80), ("STATE_NOTES", 2000)):
         values = metadata.get(field, {})
         if not isinstance(values, dict) or len(values) > 40 or any(not isinstance(k, str) or not 1 <= len(k) <= 80 or not isinstance(v, str) or not 1 <= len(v) <= limit for k, v in values.items()):
@@ -101,20 +102,36 @@ def validate_signals(signals, frames, start, base_symbol="XSD"):
     if not isinstance(signals.index, pd.DatetimeIndex) or signals.index.tz is not None or signals.index.has_duplicates or not signals.index.is_monotonic_increasing:
         raise ValueError("信号索引须为无时区、递增且不重复的交易日期。")
     x = frames[base_symbol]
-    first = frames["SOXL"].index.intersection(x.index)
+    attack_symbol = "TQQQ" if base_symbol == "QQQ" else "SOXL"
+    first = frames[attack_symbol].index.intersection(x.index)
     first = first[first >= pd.Timestamp(start)][0]
     expected = x.index[x.index.get_loc(first) - 1:]
     if not signals.index.equals(expected):
         raise ValueError("信号日期须从首个交易日前一收盘日起连续覆盖至最新日线，不能删减交易日。")
-    signals = signals.loc[:, list(REQUIRED)].copy()
+    portfolio = base_symbol == "QQQ"
+    if portfolio and any(col not in signals for col in PORTFOLIO_COLUMNS):
+        raise ValueError("QQQ策略须返回weight_QQQ、weight_TQQQ和rebalance_band。")
+    signals = signals.loc[:, [*REQUIRED, *(PORTFOLIO_COLUMNS if portfolio else ())]].copy()
     numbers = ("weight", "xsd_close", "xsd_annual", "xsd_ma20", "qqq_close", "qqq_annual", "anchored_peak", "peak_drawdown", "volume_multiple")
     for col in numbers:
         if not pd.api.types.is_numeric_dtype(signals[col]) or pd.api.types.is_bool_dtype(signals[col]) or not np.isfinite(signals[col].to_numpy(dtype=float)).all():
             raise ValueError(f"{col}须为有限数值，不能含空值或无穷大。")
     if not signals.weight.between(0, 1).all():
         raise ValueError("目标仓位 weight 须在0至1之间。")
-    if not signals.symbol.isin([base_symbol, "SOXL", "CASH"]).all():
-        raise ValueError(f"目标 symbol 仅支持 {base_symbol}、SOXL、CASH。")
+    allowed = ["QQQ", "TQQQ", "MIX", "CASH"] if portfolio else [base_symbol, "SOXL", "CASH"]
+    if not signals.symbol.isin(allowed).all():
+        raise ValueError("目标 symbol 仅支持 " + "、".join(allowed) + "。")
+    if portfolio:
+        weights = signals[list(PORTFOLIO_COLUMNS)]
+        if any(not pd.api.types.is_numeric_dtype(weights[c]) or pd.api.types.is_bool_dtype(weights[c]) for c in weights) or not np.isfinite(weights.to_numpy(dtype=float)).all():
+            raise ValueError("双资产仓位及再平衡阈值须为有限数值。")
+        if not weights.ge(0).all().all() or not weights.le(1).all().all():
+            raise ValueError("双资产仓位及再平衡阈值须在0至1之间。")
+        if not np.allclose(signals.weight, signals.weight_QQQ + signals.weight_TQQQ, atol=1e-12, rtol=0):
+            raise ValueError("总仓位必须等于QQQ和TQQQ仓位之和。")
+        expected_symbols = np.where(signals.weight_QQQ > 0, np.where(signals.weight_TQQQ > 0, "MIX", "QQQ"), np.where(signals.weight_TQQQ > 0, "TQQQ", "CASH"))
+        if not np.array_equal(signals.symbol, expected_symbols):
+            raise ValueError("symbol须与双资产仓位一致。")
     if (signals.loc[signals.symbol == "CASH", "weight"] != 0).any():
         raise ValueError("CASH目标的weight须为0。")
     if not signals.regime.isin(["BULL", "BEAR"]).all():

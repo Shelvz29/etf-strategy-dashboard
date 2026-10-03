@@ -116,7 +116,7 @@ def render(snapshot, current=True):
     if last:
         qualifier = ("当前确认" if current else "缓存参考") if picked == "active" else "最新收盘试算（未启用）"
         st.info(f"{qualifier}：{core.state_name(last['state'], profile)} · {last['state']} · {last['date']}（美东）\n\n"
-                f"目标：{last['symbol']} {core.percent(last['weight'])} · 现金 {core.percent(1-last['weight'])}")
+                f"目标：{core.target_text(last)} · 现金 {core.percent(1-last['weight'])}")
         if note := next((row["note"] for row in rows if row["code"] == last["state"]), ""):
             st.write(note)
         else:
