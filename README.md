@@ -99,12 +99,15 @@ cd monitor
 monitor/                       看板、后台、策略编辑、回测、测试
 monitor/strategies/             可编辑的发行策略源码
 monitor/import_strategies.py    首次导入；不覆盖已有用户版本
+research/                      离线策略对比、宏观风险指标及报告核对工具
 third_party/moomoo/             原始策略文件和授权说明
 backtests/2026-10-02-xsd-soxl/   冻结的半导体策略与执行引擎
 exports/build_project_package.py 本机离线项目包工具（需要本地研究数据）
 CHANGELOG.md                    经用户确认发布的更新日志
 AGENTS.md                       后续修改、Git记录和发布约定
 ```
+
+离线实验的输入要求、公开宏观数据来源和运行步骤见 [研究工具说明](research/README.md)。完整历史实验依赖本机保存的私人策略和确认行情；这些输入及研究报告不包含在公开仓库中。构造数据的规则测试可以独立运行。
 
 每次开发修改按有意义的阶段保存为本地 Git 提交。**用户确认提交／发布后**才生成当次更新日志、发布标签并推送 GitHub；不会把每个开发中间版本都自动发布。网页内保存的私人策略版本保存在本机数据库，不自动上传仓库；要分享某个版本，请先导出代码并明确选择提交。
 
