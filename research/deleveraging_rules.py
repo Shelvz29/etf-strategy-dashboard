@@ -82,4 +82,3 @@ def generate_risk_signals(frames, signals, rules):
 
 RISK_LABELS={'DELEV_VOL_CAP':'波动率减仓','DELEV_TREND_CAP':'趋势恶化减仓',
              'DELEV_DEEP_WAIT':'深跌等待恢复','DELEV_RECOVERY_WAIT':'等待恢复加仓','DELEV_STATIC_CAP':'固定仓位限制'}
-
