@@ -106,7 +106,7 @@ class MacroTests(unittest.TestCase):
     def test_service_updates_macro_even_when_etf_refresh_fails(self):
         import service
         core.put('snapshot',{'last':{'date':'2026-10-02'},'source':'Yahoo 公开日线'})
-        with patch('sys.argv',['service','--once']),patch.object(core,'bootstrap'),patch.object(core,'record_failure'),patch.object(core,'refresh_full',side_effect=RuntimeError('ETF unavailable')),patch.object(sources,'refresh',return_value={}) as macro:
+        with patch('sys.argv',['service','--once']),patch.object(core,'bootstrap'),patch.object(core,'record_failure'),patch.object(core,'refresh_full',side_effect=RuntimeError('ETF unavailable')),patch.object(service.market_factors,'refresh',return_value={}),patch.object(sources,'refresh',return_value={}) as macro:
             service.main()
         macro.assert_called_once_with(force=True)
 

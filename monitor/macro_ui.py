@@ -217,3 +217,4 @@ def render():
                         save_release_date(month,release);st.rerun()
                     except ValueError as exc:st.error(str(exc))
         st.caption('利率来自财政部平价收益率，油价为EIA现货；CPI按当前未季调指数计算同比，不是历史首次公告归档。公告日期缺失时不猜测跳升窗口；缺失、过期指标显示待核对。')
+    return panel

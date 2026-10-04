@@ -7,6 +7,7 @@ import time
 
 import core
 import macro_sources
+import market_factors
 
 
 def main():
@@ -74,6 +75,11 @@ def main():
                     logger.info("Macro observations checked independently of strategy targets")
                 except Exception:
                     logger.exception("Macro refresh failed; confirmed trading signals are unchanged")
+                try:
+                    market_factors.refresh(force=forced or args.once)
+                    logger.info("Extended factors checked independently of strategy targets")
+                except Exception:
+                    logger.exception("Extended factor refresh failed; confirmed trading signals are unchanged")
                 macro_due = time.monotonic() + 1800
             if args.once:
                 break
