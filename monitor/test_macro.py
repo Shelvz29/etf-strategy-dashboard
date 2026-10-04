@@ -117,7 +117,10 @@ class MacroTests(unittest.TestCase):
         app="import macro_ui\nmacro_ui.render()"
         with patch.object(macro_ui,'qqq_prices',return_value=q),patch.object(core,'now_utc',return_value=at.to_pydatetime()):
             page=AppTest.from_string(app).run()
-        self.assertEqual(len(page.exception),0);self.assertEqual(len(page.metric),4);self.assertEqual(len(page.dataframe),2)
+        self.assertEqual(len(page.exception),0);self.assertEqual(len(page.dataframe),1)
+        markup=''.join(row.value for row in page.markdown)
+        self.assertIn('macro-card',markup);self.assertIn('macro-detail',markup)
+        self.assertIn('多组高风险',markup)
         self.assertTrue(any('WTI更新失败' in row.value for row in page.warning));self.assertEqual(before,core.active_strategy()['fingerprint'])
         cache['cpi']['release_dates']={};core.put('macro_sources',cache)
         with patch.object(macro_ui,'qqq_prices',return_value=q),patch.object(core,'now_utc',return_value=at.to_pydatetime()):

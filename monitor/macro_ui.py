@@ -1,5 +1,6 @@
 """Display-only macro risk assessment. It never generates trading targets."""
 import math
+from html import escape
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -8,6 +9,64 @@ import core
 from macro_sources import SOURCES, save_release_date, CALENDAR
 
 GROUP_NAMES={'rates':'利率风险','oil':'油价风险','policy':'货币政策风险','cpi':'通胀风险'}
+
+CARD_STYLE='''<style>
+.macro-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:12px 0 18px}
+.macro-card{border:1px solid var(--edge);border-left:6px solid var(--ink);border-radius:12px;padding:18px 20px;background:var(--bg);color:#20344d;min-width:0}
+.macro-card.clear{--bg:#edf8f1;--ink:#23764c;--edge:#b5d9c3}
+.macro-card.watch{--bg:#fff9e7;--ink:#8a6510;--edge:#e7d28e}
+.macro-card.triggered{--bg:#fff0df;--ink:#a75312;--edge:#edc092}
+.macro-card.high{--bg:#fff0ee;--ink:#b2352b;--edge:#e7aaa4}
+.macro-card.severe{--bg:#fae6e9;--ink:#8f2338;--edge:#d79ca7}
+.macro-card.unknown{--bg:#f0f3f7;--ink:#59687b;--edge:#c4cdd9}
+.macro-top{display:flex;gap:10px;justify-content:space-between;align-items:start;font-weight:600}
+.macro-badge{color:var(--ink);border:1px solid var(--edge);border-radius:5px;padding:3px 8px;font-size:13px;white-space:nowrap}
+.macro-value{font-size:27px;line-height:1.35;font-weight:700;margin:12px 0 8px;overflow-wrap:anywhere}
+.macro-meta{font-size:13px;color:#526275;margin-top:7px;line-height:1.55;overflow-wrap:anywhere}
+.macro-level{margin:12px 0 14px}.macro-level .macro-value{font-size:24px}
+.macro-detail .macro-value{font-size:17px}.macro-detail .macro-meta{font-size:13px}
+.macro-legend{font-size:13px;color:#526275;margin:8px 0 14px;line-height:1.8}
+@media(min-width:1150px){.macro-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.macro-detail{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:520px){.macro-grid{grid-template-columns:1fr}}
+</style>'''
+
+
+def card(title,value,badge,tone,meta='',extra=''):
+    return (f'<div class="macro-card {tone}"><div class="macro-top"><span>{escape(title)}</span>'
+            f'<span class="macro-badge">{escape(badge)}</span></div><div class="macro-value">{escape(value)}</div>'
+            f'<div class="macro-meta">{escape(meta)}</div><div class="macro-meta">{escape(extra)}</div></div>')
+
+
+def risk_cards(panel,cache):
+    cards=[]
+    for name in SOURCES:
+        value=panel['latest'].get(name,{})
+        display={'rates':f"{value.get('yield10',0):.2f}%",'oil':f"${value.get('wti',0):.2f}",
+            'policy':f"{value.get('target_upper',0):.2f}%",'cpi':f"{value.get('headline',0):.1f}% / {value.get('core',0):.1f}%"}[name] if value else '待获取'
+        group=panel['groups'][name];tone='unknown' if group is None else 'triggered' if group else 'clear'
+        badge='待核对' if group is None else '已触发' if group else '未触发'
+        label={'rates':'10年名义国债收益率','oil':'WTI现货价格','policy':'联储目标区间上限','cpi':'总体／核心CPI同比'}[name]
+        date=('统计月：' if name=='cpi' else '观测日：')+value.get('month' if name=='cpi' else 'date','—')
+        if cache.get(name,{}).get('last_error'):date+=' · 更新失败，旧缓存'
+        cards.append(card(GROUP_NAMES[name],display,badge,tone,label,date))
+    low,high=panel['lower'],panel['upper'];score=str(low) if low==high else f'{low}—{high}'
+    tones=['clear','watch','triggered','high','severe'];levels=['较低','需要关注','风险升高','高风险','多组高风险']
+    if low!=high and low<3:tone='unknown';level='待核对'
+    else:tone=tones[low];level=levels[low]+(' · 部分待核对' if low!=high else '')
+    if low>=3:message='满足“三组风险”条件。此处仅展示研究条件，当前策略目标不因此调整。'
+    elif high>=3:message='部分指标待核对，无法确认是否满足“三组风险”条件。'
+    else:message='未满足“三组风险”条件。'
+    overall=card('宏观风险等级',f'{level} · {score}/4组','按触发组数划分',tone,message,f"判定截至 {panel['as_of']} 已确认收盘")
+    return '<div class="macro-grid">'+''.join(cards)+'</div><div class="macro-level">'+overall+'</div>'
+
+
+def detail_cards(rows):
+    cards=[]
+    for row in rows:
+        tone={'触发':'triggered','未触发':'clear'}.get(row['触发'],'unknown')
+        cards.append(card(row['指标'],row['风险计算值'],row['触发'],tone,row['触发条件'],
+            row['组别']+' · 风险使用日期：'+row['风险使用日期']))
+    return '<div class="macro-grid macro-detail">'+''.join(cards)+'</div>'
 
 
 def either(*flags):
@@ -135,24 +194,14 @@ def render():
         panel=build_panel(cache,qqq)
     except (ValueError,KeyError,TypeError) as exc:
         st.warning('宏观风险判定暂不可用：'+str(exc));return
-    # Two rows keep both CPI values readable in the app's narrow side panel.
-    cols=st.columns(2)+st.columns(2)
-    for col,name in zip(cols,SOURCES):
-        value=panel['latest'].get(name,{})
-        display={'rates':f"{value.get('yield10',0):.2f}%",'oil':f"${value.get('wti',0):.2f}",
-            'policy':f"{value.get('target_upper',0):.2f}%",'cpi':f"{value.get('headline',0):.1f}% / {value.get('core',0):.1f}%"}[name] if value else '待获取'
-        col.metric({'rates':'10年名义国债 · 最新观测','oil':'WTI现货 · 最新观测','policy':'联储目标上限 · 最新观测','cpi':'总体／核心CPI同比'}[name],display)
-        col.caption(('统计月：' if name=='cpi' else '观测日：')+value.get('month' if name=='cpi' else 'date','—'))
-        group=panel['groups'][name];col.caption(GROUP_NAMES[name]+'：'+('待核对' if group is None else '已触发' if group else '未触发'))
-    low,high=panel['lower'],panel['upper'];score=str(low) if low==high else f'{low}—{high}'
-    if low>=3:st.warning(f'风险分数 {score}/4：满足“三组风险”条件。研究版会限制进攻目标至50%，当前启用策略不因此调仓。')
-    elif high>=3:st.warning(f'风险分数 {score}/4：部分指标待核对，无法确认是否满足“三组风险”。')
-    else:st.info(f'风险分数 {score}/4：未满足“三组风险”条件。')
-    st.caption(f"风险判定截至 {panel['as_of']} 已确认收盘；国债／政策滞后2个NYSE交易日、油价滞后3日。上方最新值可能与下表的保守风险计算值不同。四组各计一票，倒挂参考不重复计分。")
+    st.markdown(CARD_STYLE+risk_cards(panel,cache),unsafe_allow_html=True)
+    st.markdown('<div class="macro-legend">单组：🟩 未触发　🟧 已触发　⬜ 待核对<br>综合：0组绿色 · 1组黄色 · 2组橙色 · 3组红色 · 4组深红色；数据不足时灰色。等级仅表示宏观条件的触发组数。</div>',unsafe_allow_html=True)
+    st.caption(f"风险判定截至 {panel['as_of']} 已确认收盘；国债／政策滞后2个NYSE交易日、油价滞后3日。上方最新值可能与下方指标卡片的保守风险计算值不同。四组各计一票，倒挂参考不重复计分。")
     for note in panel['notes']:st.warning(note)
     for name,record in cache.items():
         if record.get('last_error'):st.warning(record['last_error']['message']+'；继续显示上次成功值。')
-    st.dataframe(pd.DataFrame(panel['rows']),hide_index=True,width='stretch')
+    with st.expander('各指标的矩形卡片、计算值与触发条件'):
+        st.markdown(detail_cards(panel['rows']),unsafe_allow_html=True)
     with st.expander('数据来源、获取时间和其他原始值'):
         st.dataframe(pd.DataFrame(panel['sources']),hide_index=True,width='stretch')
         rates=panel['latest'].get('rates',{})

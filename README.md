@@ -58,6 +58,8 @@ python3.12 -m venv .venv
 
 ## 今日宏观观察
 
+四组指标采用彩色矩形卡片，展开后可看9项具体指标的卡片、计算值与条件。单组绿色表示未触发，橙色表示触发，灰色表示待核对；综合0／1／2／3／4组分别为绿／黄／橙／红／深红。有未知指标时显示分数范围和待核对，不用绿色暗示数据完整。颜色等级只表示条件触发组数，不改变策略目标。
+
 “今日看板”展示10年名义国债、10年实际国债、2年国债、WTI现货、联储目标区间上限和总体／核心CPI同比，以及9项风险触发指标。来源为[美国财政部](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)、[EIA](https://www.eia.gov/dnav/pet/hist/LeafHandler.ashx?n=PET&s=RWTC&f=D)、[NY Fed](https://www.newyorkfed.org/markets/reference-rates/effr)和[BLS](https://www.bls.gov/bls/news-release/cpi.htm)，不需要付费API或交易账户。
 
 点击“更新行情”同时请求ETF和宏观数据，即使ETF更新失败也独立检查宏观来源。后台每30分钟检查一次，CPI正常轮询间隔为1小时以节约公开接口额度，手动请求距离上次尝试不足60秒时复用缓存。展示每个来源的观测日／统计月、获取时间和错误状态；单个来源失败时保留其上次成功值，不影响其他来源或确认交易信号。
