@@ -6,6 +6,7 @@ import os
 import time
 
 import core
+import macro_sources
 
 
 def main():
@@ -35,7 +36,7 @@ def main():
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
     core.bootstrap()
-    full_due = quote_due = 0
+    full_due = quote_due = macro_due = 0
     last_request = core.get("refresh_handled")
     try:
         while True:
@@ -66,6 +67,14 @@ def main():
                 last_request = request
                 core.put("refresh_handled", request)
                 quote_due = 0
+            if forced or args.once or time.monotonic() >= macro_due:
+                core.put("heartbeat", {"time": core.iso_now(), "pid": os.getpid(), "busy": True})
+                try:
+                    macro_sources.refresh(force=forced or args.once)
+                    logger.info("Macro observations checked independently of strategy targets")
+                except Exception:
+                    logger.exception("Macro refresh failed; confirmed trading signals are unchanged")
+                macro_due = time.monotonic() + 1800
             if args.once:
                 break
             if clock["is_open"] and time.monotonic() >= quote_due:
@@ -83,6 +92,8 @@ def main():
     finally:
         core.put("heartbeat", {"time": core.iso_now(), "pid": os.getpid(), "stopped": True})
         lock.close()
+        logger.removeHandler(handler)
+        handler.close()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 ## 功能
 
 - 今日目标、参考行情、收盘确认和盘中预估；Windows 本机提醒。
+- 今日宏观观察：国债名义／实际利率、WTI现货、联储目标利率、总体／核心CPI及四组风险。随行情更新，显示观测与获取日期；独立于策略买卖目标。
 - 矩形策略卡片：2017年至最新确认收盘、近1／2／3／5年的年化收益和最大回撤。
 - Python 文本框编辑、预览、另存策略、保存版本、恢复版本、明确启用。
 - 每个策略独立的状态名称、解释及当前触发状态。
@@ -55,6 +56,16 @@ python3.12 -m venv .venv
 .venv/bin/python -m streamlit run monitor/app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
 ```
 
+## 今日宏观观察
+
+“今日看板”展示10年名义国债、10年实际国债、2年国债、WTI现货、联储目标区间上限和总体／核心CPI同比，以及9项风险触发指标。来源为[美国财政部](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)、[EIA](https://www.eia.gov/dnav/pet/hist/LeafHandler.ashx?n=PET&s=RWTC&f=D)、[NY Fed](https://www.newyorkfed.org/markets/reference-rates/effr)和[BLS](https://www.bls.gov/bls/news-release/cpi.htm)，不需要付费API或交易账户。
+
+点击“更新行情”同时请求ETF和宏观数据，即使ETF更新失败也独立检查宏观来源。后台每30分钟检查一次，CPI正常轮询间隔为1小时以节约公开接口额度，手动请求距离上次尝试不足60秒时复用缓存。展示每个来源的观测日／统计月、获取时间和错误状态；单个来源失败时保留其上次成功值，不影响其他来源或确认交易信号。
+
+最新观测卡片与风险计算表区分：风险截至已确认收盘，国债／政策滞后2个NYSE交易日、油价滞后3日；利率、油价、政策、CPI四组各计一票，倒挂参考不重复计票。这里只展示“三组风险”的研究条件，**不会自动限制当前仓位、启用宏观策略或提交订单**。每日观测超过15天、CPI公告超过100天、数据缺失或缓存过期时标注待核对，分数可能显示范围而不是把未知算成0。
+
+CPI使用当前BLS未季调指数计算同比，不是完整首次公告归档；保留未公布月份的缺口。公告日从BLS官方日历获取，接口不可用且没有已知日期时，不猜测公告后的5日窗口、不将通胀组判为已确认；可在来源说明中核对官网后记录实际公告日，程序拒绝未来日期。新克隆无需本机研究目录；已核对过的公告日期只保存在本机运行缓存。宏观数据也可能更正，显示与历史研究的首次公告口径存在差异。
+
 ## 策略编辑接口
 
 每份策略源文件位于 `monitor/strategies/`。复制代码到编辑框修改，可在保存前预览；保存版本和启用版本是独立操作。
@@ -88,10 +99,10 @@ python3.12 -m venv .venv
 
 ```powershell
 cd monitor
-..\.venv\Scripts\python.exe -m unittest test_moomoo -v
+..\.venv\Scripts\python.exe -m unittest test_moomoo test_macro -v
 ```
 
-完整回归套件为 `test_monitor test_performance test_strategies test_macd_risk test_moomoo`，使用原研究的冻结行情和MACD研究结果作为基准。这些下载行情不在公开仓库中；没有对应数据时不要把缺失数据错误视为策略失败。GitHub Actions运行可独立复现的构造行情测试；新源码另做编译检查。
+宏观模块9项构造数据测试核对与预设研究条件一致、公告时点、负油价、来源失败保留缓存、未知分数、后台独立更新、公告日期校验和Streamlit显示。完整回归套件为 `test_monitor test_performance test_strategies test_macd_risk test_moomoo test_macro`，使用原研究的冻结行情和MACD研究结果作为基准。这些下载行情不在公开仓库中；没有对应数据时不要把缺失数据错误视为策略失败。GitHub Actions运行可独立复现的构造行情测试；新源码另做编译检查。
 
 ## 目录与版本记录
 

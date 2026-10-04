@@ -9,6 +9,7 @@ import core
 import performance_ui
 import state_ui
 import strategy_ui
+import macro_ui
 
 core.bootstrap()
 st.set_page_config(page_title=core.APP_NAME + " · " + core.active_strategy()["name"], page_icon="📈", layout="wide")
@@ -57,7 +58,7 @@ def chart(data, cfg, base="XSD"):
 
 def submit_refresh():
     core.put("refresh_request", str(time.time_ns()))
-    st.toast("已请求更新行情，后台完成后会自动显示。")
+    st.toast("已请求更新行情和宏观指标，后台完成后会自动显示。")
 
 
 @st.fragment(run_every="15s")
@@ -135,6 +136,7 @@ def dashboard():
                 st.warning("盘中预估已过期，请等待行情更新。收盘确认目标保持不变。")
         elif clock["is_open"]:
             st.caption("盘中预估尚未形成，正在等待三个标的的完整当日数据。")
+        macro_ui.render()
         chart(snap["chart"], cfg, base)
         st.caption("信号价格口径：" + ("含分红调整后的价格。" if cfg.signal_adjusted else "拆股调整价格，不额外调整分红。"))
         cols = st.columns(4)
