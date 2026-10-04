@@ -1,0 +1,2 @@
+# Optional public-data reader for the macro research tools, not the dashboard.
+xlrd>=2.0.1,<3
