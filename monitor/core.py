@@ -134,8 +134,8 @@ def strategy_fingerprint(profile):
 
 
 def default_strategy():
-    profile = {"id": "default", "revision": 1, "name": STRATEGY_NAME,
-               "parameters": baseline.Config().to_dict(), "description": "内置组合策略，保留为可随时切回的参考版本。",
+    profile = {"id": "default", "revision": 2, "name": STRATEGY_NAME,
+               "parameters": dict(baseline.Config().to_dict(), attack=1.0), "description": "内置组合策略，进攻目标100%；冻结研究基线保持原样。",
                "engine_hash": STRATEGY_HASH, "created": None, "updated": None}
     profile["fingerprint"] = strategy_fingerprint(profile)
     return profile

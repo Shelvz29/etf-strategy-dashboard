@@ -28,6 +28,7 @@ def template(profile, baseline, base_symbol="XSD"):
     if profile.get("kind") == "python":
         return profile["code"]
     config = inspect.getsource(baseline.Config)
+    config = config.replace('attack: float = .99',f"attack: float = {profile['parameters']['attack']!r}")
     function = inspect.getsource(baseline.generate_signals)
     # Keep the actual rule implementation visible; omit the research narrative.
     first = function.index('    """')

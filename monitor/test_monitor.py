@@ -42,6 +42,9 @@ class MonitorTests(unittest.TestCase):
         original.index.name = "date"
         original.index = original.index.as_unit("s")
         original["reason"] = original["reason"].fillna("")
+        legacy=core.make_strategy('冻结99%参考',core.baseline.Config().to_dict())
+        assert_frame_equal(core.replay(self.frames,legacy),original,check_freq=False,check_exact=False,atol=1e-10,rtol=1e-12)
+        original['weight']=original.weight.mask(original.weight.eq(.99),1.)
         assert_frame_equal(self.signals, original, check_freq=False, check_exact=False, atol=1e-10, rtol=1e-12)
         # The live feed's 2015 warm-up must produce the identical 2017-onward
         # state sequence, including the anchored peak and all path-dependent locks.

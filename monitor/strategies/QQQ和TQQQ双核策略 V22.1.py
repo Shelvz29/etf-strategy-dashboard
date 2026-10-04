@@ -3,17 +3,17 @@
 # https://www.youtube.com/@wealthplantations
 # 原文件：third_party/moomoo/qqq-tqqq-v22.1-moomoo.txt
 # License: CC BY-NC 4.0 https://creativecommons.org/licenses/by-nc/4.0/
-# 修改说明：从moomoo API改为DataFrame；保留每日状态条件和目标权重。
+# 修改说明：从moomoo API改为DataFrame；保留每日状态条件；按用户要求将99%目标改为100%。
 # 不含账户订单暂停、T+1结算等待、500美元门槛和整数股限制；按次日开盘模拟。
 # 不代表原作者认可本项目。
 import numpy as np
 import pandas as pd
 
 BASE_SYMBOL = "QQQ"
-PARAMETERS = {'annual_days': 200, 'macro_annual_days': 200, 'short_days': 20, 'macro_buffer': 0.0, 'volume_multiple': 2.0, 'volume_days': 60, 'red_body': 0.02, 'high_zone': 0.95, 'cash_drawdown': 0.15, 'deep_bull': 0.25, 'deep_bear': 0.3, 'bull_cool': 2, 'bear_cool': 2, 'bull_defense': 0.9, 'bear_defense': 0.5, 'attack': 0.99, 'top_release': 'annual_or_drawdown', 'deep_latch': False, 'cooldown_mode': 'consecutive_above20', 'signal_adjusted': False, 'peak_seed': 'high', 'volume_include_today': False, 'macro_enabled': True}
+PARAMETERS = {'annual_days': 200, 'macro_annual_days': 200, 'short_days': 20, 'macro_buffer': 0.0, 'volume_multiple': 2.0, 'volume_days': 60, 'red_body': 0.02, 'high_zone': 0.95, 'cash_drawdown': 0.15, 'deep_bull': 0.25, 'deep_bear': 0.3, 'bull_cool': 2, 'bear_cool': 2, 'bull_defense': 0.9, 'bear_defense': 0.5, 'attack': 1.0, 'top_release': 'annual_or_drawdown', 'deep_latch': False, 'cooldown_mode': 'consecutive_above20', 'signal_adjusted': False, 'peak_seed': 'high', 'volume_include_today': False, 'macro_enabled': True}
 STRATEGY_RULES = {'hi_enabled': False, 'hi_deviation': 0.2, 'deep_requires_rising': False, 'deep_drawdown': 0.3, 'battle_drawdown': 0.1, 'min_risk_off_days': 2, 'normal_qqq': 0.45, 'normal_tqqq': 0.45, 'normal_drift_band': 0.2}
 STATE_LABELS = {'NORMAL': '常态双核配置', 'ZONE_DESPAIR_TQQQ': '深跌TQQQ进攻', 'ZONE_BATTLE_ATTACK': '拉锯进攻', 'ZONE_BATTLE_DEFEND': '拉锯防御', 'BEAR_CASH': '破年线现金等待', 'TOP_ESCAPE': '高位放量防御'}
-STATE_NOTES = {'NORMAL': '未触发高位放量防御；QQQ不低于MA200且距运行峰值回撤不超过10%。目标QQQ45%、TQQQ45%、现金10%；双资产市值偏离超过20%时再平衡。防御返回本状态还需至少2个已结束交易日且MA20上升。', 'ZONE_DESPAIR_TQQQ': 'QQQ低于MA200且距运行峰值回撤至少30%；目标TQQQ99%、现金1%。V22.1不要求MA20上升。', 'ZONE_BATTLE_ATTACK': 'QQQ低于MA200、距峰值回撤10%至30%且收盘高于MA20；或QQQ不低于MA200但回撤严格大于10%。目标TQQQ99%、现金1%。从防御状态返回还需等待2交易日且MA20上升。', 'ZONE_BATTLE_DEFEND': 'QQQ低于MA200、距峰值回撤10%至30%但未站上MA20；或恢复进攻被反转过滤。目标QQQ90%、现金10%。', 'BEAR_CASH': 'QQQ低于MA200且距峰值回撤小于10%，目标现金100%。恢复进攻/常态需至少2交易日且MA20上升。', 'TOP_ESCAPE': 'QQQ收盘不低于运行峰值95%，当日成交量严格超过前60日均量2.0倍且收盘低于开盘；目标QQQ90%、现金10%。原条件仅要求阴线，没有最小实体跌幅。恢复进攻/常态需至少2交易日且MA20上升。'}
+STATE_NOTES = {'NORMAL': '未触发高位放量防御；QQQ不低于MA200且距运行峰值回撤不超过10%。目标QQQ45%、TQQQ45%、现金10%；双资产市值偏离超过20%时再平衡。防御返回本状态还需至少2个已结束交易日且MA20上升。', 'ZONE_DESPAIR_TQQQ': 'QQQ低于MA200且距运行峰值回撤至少30%；目标TQQQ100%、现金0%。V22.1不要求MA20上升。', 'ZONE_BATTLE_ATTACK': 'QQQ低于MA200、距峰值回撤10%至30%且收盘高于MA20；或QQQ不低于MA200但回撤严格大于10%。目标TQQQ100%、现金0%。从防御状态返回还需等待2交易日且MA20上升。', 'ZONE_BATTLE_DEFEND': 'QQQ低于MA200、距峰值回撤10%至30%但未站上MA20；或恢复进攻被反转过滤。目标QQQ90%、现金10%。', 'BEAR_CASH': 'QQQ低于MA200且距峰值回撤小于10%，目标现金100%。恢复进攻/常态需至少2交易日且MA20上升。', 'TOP_ESCAPE': 'QQQ收盘不低于运行峰值95%，当日成交量严格超过前60日均量2.0倍且收盘低于开盘；目标QQQ90%、现金10%。原条件仅要求阴线，没有最小实体跌幅。恢复进攻/常态需至少2交易日且MA20上升。'}
 
 def generate_signals(frames, start="2017-01-02"):
     q = frames["QQQ"]
@@ -76,7 +76,7 @@ def generate_signals(frames, start="2017-01-02"):
             next_state = state
         wq, wt = 0., 0.
         if next_state in ("ZONE_DESPAIR_TQQQ", "ZONE_BATTLE_ATTACK"):
-            wt = .99
+            wt = 1.0
         elif next_state in ("ZONE_BATTLE_DEFEND", "TOP_ESCAPE"):
             wq = .90
         elif next_state == "HI":

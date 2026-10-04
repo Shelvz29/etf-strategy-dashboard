@@ -71,7 +71,7 @@ def generate_signals(frames, start="2017-01-02"):
             next_state = state
         wq, wt = 0., 0.
         if next_state in ("ZONE_DESPAIR_TQQQ", "ZONE_BATTLE_ATTACK"):
-            wt = .99
+            wt = PARAMETERS['attack']
         elif next_state in ("ZONE_BATTLE_DEFEND", "TOP_ESCAPE"):
             wq = .90
         elif next_state == "HI":
@@ -121,9 +121,11 @@ def main():
                 HI='首次QQQ收盘严格高于MA200的120%，目标QQQ100%。锁定后不依靠乖离回落退出；仍高于MA200时，收盘跌破MA20且MA20向下转HI_CASH，否则保持HI；不高于MA200时返回基础判断。此锁定链优先于放量阴线。',
                 HI_CASH='HI后QQQ跌破MA20且该均线向下，目标现金100%。仍高于MA200且收盘严格高于MA20时恢复NORMAL；不高于MA200时回到基础状态判断；否则继续现金。')
         params=core.baseline.Config().to_dict()
-        params.update(annual_days=200,macro_annual_days=200,short_days=20,volume_days=60,volume_multiple=2.2 if seasonal else 2.0,high_zone=.95,macro_buffer=0.,bull_cool=2,bear_cool=2)
+        params.update(annual_days=200,macro_annual_days=200,short_days=20,volume_days=60,volume_multiple=2.2 if seasonal else 2.0,high_zone=.95,macro_buffer=0.,bull_cool=2,bear_cool=2,attack=1.0)
         header=f'# {name} · 本地日线适配版\n# 原作者：© 2026 园园AI (aiyuan.ai)，财富种植园 @wealthplantations\n# https://www.youtube.com/@wealthplantations\n# 原文件：third_party/moomoo/{original}\n# License: CC BY-NC 4.0 https://creativecommons.org/licenses/by-nc/4.0/\n# 修改说明：从moomoo API改为DataFrame；保留每日状态条件和目标权重。\n# 不含账户订单暂停、T+1结算等待、500美元门槛和整数股限制；按次日开盘模拟。\n# 不代表原作者认可本项目。\nimport numpy as np\nimport pandas as pd\n\nBASE_SYMBOL = "QQQ"\n'
         code=header+'PARAMETERS = '+repr(params)+'\nSTRATEGY_RULES = '+repr(rules)+'\nSTATE_LABELS = '+repr(names)+'\nSTATE_NOTES = '+repr(explanations)+'\n'+BODY
+        from full_allocation import upgrade_source
+        code=upgrade_source(code)
         (ROOT/(name+'.py')).write_text(code,encoding='utf-8')
         print(name)
 

@@ -168,7 +168,7 @@ class StrategyTests(unittest.TestCase):
         page = AppTest.from_string("import core, strategy_ui\nstrategy_ui.render(core.get('snapshot'))", default_timeout=30).run()
         [w for w in page.text_input if w.label == "策略名称"][0].set_value("页面自定义组合")
         code = [w for w in page.text_area if w.label == "策略代码（Python）"][0]
-        code.set_value(code.value.replace("'attack': 0.99", "'attack': 0.7"))
+        code.set_value(code.value.replace("'attack': 1.0", "'attack': 0.7"))
         [b for b in page.button if b.label == "仅保存代码"][0].click().run()
         self.assertEqual(len(page.exception), 0)
         saved = core.list_strategies()[-1]
@@ -188,7 +188,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(len(calculator.exception), 0)
         self.assertEqual(calculator.session_state["performance_last_result"]["assets"][0], "页面改名组合")
         before = core.get("snapshot")
-        [w for w in calculator.selectbox if w.label == "回测策略"][0].set_value("default:1")
+        [w for w in calculator.selectbox if w.label == "回测策略"][0].set_value(f"default:{self.default['revision']}")
         [b for b in calculator.button if b.label == "生成表格与图表"][0].click().run()
         self.assertEqual(len(calculator.exception), 0)
         self.assertEqual(calculator.session_state["performance_last_result"]["assets"][0], core.STRATEGY_NAME)

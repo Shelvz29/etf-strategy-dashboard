@@ -65,6 +65,8 @@ class ImportTests(unittest.TestCase):
             with self.subTest(name=name):
                 actual=strategy_runner.calculate(self.codes[name],self.frames)
                 ref=original_daily(filename,self.frames['QQQ'])
+                # Keep original states and other targets; override 99% only.
+                for column in ('weight_QQQ','weight_TQQQ'):ref[column]=ref[column].mask(ref[column].eq(.99),1.)
                 pd.testing.assert_frame_equal(actual[ref.columns],ref,check_dtype=False,check_freq=False)
                 self.assertGreaterEqual(actual.state.nunique(),5)
 

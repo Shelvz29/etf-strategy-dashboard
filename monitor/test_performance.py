@@ -40,11 +40,13 @@ class PerformanceTests(unittest.TestCase):
 
     def test_original_nav_and_trailing_report_regression(self):
         original = pd.read_csv(core.FROZEN / "equity.csv", parse_dates=["date"], index_col="date")
-        np.testing.assert_allclose(self.full.to_numpy(), original.equity.to_numpy() / 100000, rtol=1e-12)
+        legacy=core.make_strategy(core.STRATEGY_NAME,core.baseline.Config().to_dict())
+        legacy_signals=core.replay(self.frames,legacy);legacy_full=perf.full_strategy(self.frames,legacy_signals)
+        np.testing.assert_allclose(legacy_full.to_numpy(), original.equity.to_numpy() / 100000, rtol=1e-12)
         prior = pd.read_csv(core.FROZEN / "2026-10-02-XSD-SOXL-近年回测.csv")
         for _, row in prior.iterrows():
-            win = perf.window(self.full.index, f"近{int(row.window_years)}年")
-            result = perf.compare_window(self.frames, self.signals, self.full, [], win)[perf.STRATEGY]
+            win = perf.window(legacy_full.index, f"近{int(row.window_years)}年")
+            result = perf.compare_window(self.frames, legacy_signals, legacy_full, [], win)[perf.STRATEGY]
             metric = result["metrics"]
             self.assertAlmostEqual(metric["annualized_return"], row.annualized_return, places=10)
             self.assertAlmostEqual(metric["max_drawdown"], -row.max_drawdown_close, places=10)
@@ -199,7 +201,7 @@ class PerformanceTests(unittest.TestCase):
         import code_strategy as cs
         import performance_ui as ui
         from streamlit.testing.v1 import AppTest
-        code = cs.template(core.default_strategy(), core.baseline).replace("'attack': 0.99", "'attack': 0.4")
+        code = cs.template(core.default_strategy(), core.baseline).replace("'attack': 1.0", "'attack': 0.4")
         first = core.save_strategy("代码组合", code=code)
         second = core.save_strategy("代码组合", code=code.replace("'attack': 0.4", "'attack': 0.8"),
                                     strategy_id=first['id'], expected_revision=1)
@@ -209,13 +211,14 @@ class PerformanceTests(unittest.TestCase):
         choices = [widget for widget in page.multiselect if widget.label == "对比ETF与策略（可多选）"][0]
         for p in (first, second):
             self.assertIn(ui.comparison_label(p), choices.options)
-        choices.set_value(["QQQ", *keys, "strategy:default:1"])
+        default_key=f"strategy:default:{core.default_strategy()['revision']}"
+        choices.set_value(["QQQ", *keys, default_key])
         [button for button in page.button if button.label == "生成表格与图表"][0].click()
         page.run()
         self.assertEqual(len(page.exception), 0)
         self.assertEqual(page.session_state['performance_last_result']['assets'],
                          [perf.STRATEGY, 'QQQ', ui.comparison_label(first), ui.comparison_label(second)])
-        self.assertEqual(core.get('performance_settings')['selected'], ["QQQ", *keys, "strategy:default:1"])
+        self.assertEqual(core.get('performance_settings')['selected'], ["QQQ", *keys, default_key])
         # Switching the main backtest keeps the other version as a comparison;
         # the same version selected twice must never duplicate rows or curves.
         [widget for widget in page.selectbox if widget.label == "回测策略"][0].set_value(f"{first['id']}:1")

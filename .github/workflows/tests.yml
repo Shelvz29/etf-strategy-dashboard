@@ -12,5 +12,5 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r monitor/requirements.txt
       - run: python -m compileall -q monitor backtests/2026-10-02-xsd-soxl
-      - run: python -m unittest test_moomoo test_macro test_market_factors -v
+      - run: python -m unittest test_moomoo test_macro test_market_factors test_full_allocation -v
         working-directory: monitor

@@ -28,7 +28,7 @@ class Config:
     bear_cool: int = 2
     bull_defense: float = .90
     bear_defense: float = .50
-    attack: float = .99
+    attack: float = 1.0
     top_release: str = "annual_or_drawdown"
     deep_latch: bool = False
     cooldown_mode: str = "consecutive_above20"
@@ -60,7 +60,7 @@ PARAMETERS = {
     'bear_cool': 2,
     'bull_defense': 0.9,
     'bear_defense': 0.5,
-    'attack': 0.99,
+    'attack': 1.0,
     'top_release': 'annual_or_drawdown',
     'deep_latch': False,
     'cooldown_mode': 'consecutive_above20',

@@ -93,6 +93,8 @@ def main():
         'RISK_CASH_RECOVERY':'5交易日等待已结束，但SMH MACD柱线≥0与收盘≥EMA20的恢复条件未同时满足，继续现金100%。恢复且当天没有重复触发后，采用当天基础组合的SMH、SOXL或现金目标，不强制直接买SOXL，不重置基础峰值。',
     })
     source=strategy_states.replace_metadata(source,labels,notes)
+    from full_allocation import upgrade_source
+    source=upgrade_source(source)
     target=ROOT/'MACD＋4%急跌避险策略.py'
     target.write_text(source,encoding='utf-8')
     print(str(target))
