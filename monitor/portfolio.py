@@ -1,6 +1,7 @@
 """Long-only QQQ/TQQQ execution; existing single-asset engine stays frozen."""
 import math
 
+import numpy as np
 import pandas as pd
 
 
@@ -38,7 +39,12 @@ def simulate(frames, signals, start="2017-01-03", end=None, cost_bps=10., initia
             raise ValueError("双资产目标权重无效。")
         values = {s: units[s] * frames[s].loc[day, "adj_open"] for s in symbols}
         before = cash + sum(values.values())
-        target = (sig.get("state"), *weights.values())
+        # Existing moomoo strategies rebalance on state transitions. Single-
+        # target ports can opt out to preserve their original execution rules.
+        state_trigger = sig.get("rebalance_on_state_change", True)
+        if pd.notna(sig.symbol) and not isinstance(state_trigger, (bool, np.bool_)):
+            raise ValueError("rebalance_on_state_change须为布尔值。")
+        target = (sig.get("state") if state_trigger else None, *weights.values())
         # Moomoo NORMAL uses drift of the two invested values, excluding cash.
         band = float(sig.rebalance_band) if pd.notna(sig.symbol) else 0.
         previous_day = signals.index[signals.index.get_loc(day) - 1]

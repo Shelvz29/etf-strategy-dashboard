@@ -111,7 +111,11 @@ def validate_signals(signals, frames, start, base_symbol="XSD"):
     portfolio = base_symbol == "QQQ"
     if portfolio and any(col not in signals for col in PORTFOLIO_COLUMNS):
         raise ValueError("QQQ策略须返回weight_QQQ、weight_TQQQ和rebalance_band。")
-    signals = signals.loc[:, [*REQUIRED, *(PORTFOLIO_COLUMNS if portfolio else ())]].copy()
+    optional = ["rebalance_on_state_change"] if portfolio and "rebalance_on_state_change" in signals else []
+    signals = signals.loc[:, [*REQUIRED, *(PORTFOLIO_COLUMNS if portfolio else ()), *optional]].copy()
+    for col in optional:
+        if not pd.api.types.is_bool_dtype(signals[col]) or signals[col].isna().any():
+            raise ValueError(f"{col}须为无空值的布尔值。")
     numbers = ("weight", "xsd_close", "xsd_annual", "xsd_ma20", "qqq_close", "qqq_annual", "anchored_peak", "peak_drawdown", "volume_multiple")
     for col in numbers:
         if not pd.api.types.is_numeric_dtype(signals[col]) or pd.api.types.is_bool_dtype(signals[col]) or not np.isfinite(signals[col].to_numpy(dtype=float)).all():

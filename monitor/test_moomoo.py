@@ -91,6 +91,15 @@ class ImportTests(unittest.TestCase):
         bad=sig.copy();bad.loc[bad.index[0],'symbol']='SOXL'
         with self.assertRaises(ValueError):cs.validate_signals(bad,self.frames,'2017-01-02','QQQ')
 
+    def test_state_rebalance_flag_preserved_and_checked(self):
+        sig=strategy_runner.calculate(self.codes[VARIANTS[0][0]],self.frames)
+        sig['rebalance_on_state_change']=False
+        checked=cs.validate_signals(sig,self.frames,'2017-01-02','QQQ')
+        self.assertFalse(checked.rebalance_on_state_change.any())
+        for value in (0, None, 'false'):
+            bad=sig.copy();bad['rebalance_on_state_change']=value
+            with self.assertRaises(ValueError):cs.validate_signals(bad,self.frames,'2017-01-02','QQQ')
+
     def test_target_split_changes_alert_and_ack(self):
         previous={'symbol':'MIX','weight':.9,'weight_QQQ':.45,'weight_TQQQ':.45}
         current={**previous,'weight_QQQ':.3,'weight_TQQQ':.6}
@@ -137,6 +146,21 @@ class PortfolioTests(unittest.TestCase):
         frames,sig=self.case();sig.loc[sig.index[-1],['weight_QQQ','weight_TQQQ']]=[1.,0.]
         nav,_=portfolio.simulate(frames,sig,start='2017-01-03',initial=1000.,cost_bps=0)
         self.assertAlmostEqual(nav.units_TQQQ.iloc[-1],45.)
+
+    def test_state_only_rebalance_can_be_disabled(self):
+        frames,sig=self.case()
+        frames['QQQ']['adj_open']=[10.,10.,10.,20.,20.]
+        sig.loc[sig.index[2]:,'state']='NEW_STATE'
+        default,_=portfolio.simulate(frames,sig,start='2017-01-03',initial=1000.,cost_bps=10)
+        sig['rebalance_on_state_change']=False
+        port,orders=portfolio.simulate(frames,sig,start='2017-01-03',initial=1000.,cost_bps=10)
+        self.assertEqual(int(default.rebalance.sum()),2)
+        self.assertEqual(int(port.rebalance.sum()),1)
+        self.assertEqual(len(orders),2)
+        sig.loc[sig.index[3]:,['weight_QQQ','weight_TQQQ','weight']]=0.
+        sig.loc[sig.index[3]:,'symbol']='CASH'
+        changed,_=portfolio.simulate(frames,sig,start='2017-01-03',initial=1000.,cost_bps=10)
+        self.assertEqual(int(changed.rebalance.sum()),2)
 
 
 if __name__=='__main__':unittest.main()

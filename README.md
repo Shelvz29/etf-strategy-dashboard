@@ -64,6 +64,7 @@ python3.12 -m venv .venv
 - `STATE_LABELS`／`STATE_NOTES`：状态代码到名称／解释的字典。
 - `generate_signals(frames, start="2017-01-02")`：返回完整日期的日线信号表，包含首个交易日的前一日信号，只使用当天及以前的数据。
 - 单资产信号用 `symbol`、`weight`；QQQ双资产还须返回 `weight_QQQ`、`weight_TQQQ`、`rebalance_band`，总仓位等于两者之和，双持仓时 `symbol="MIX"`。
+- QQQ双资产可选返回布尔列 `rebalance_on_state_change`：省略时仍按状态切换调仓；设为 `False` 时只因目标仓位变化或再平衡阈值触发调仓，适合保留单资产策略移植前的执行方式。不能填写空值、数字或字符串。
 
 运行器限制导入、常见文件／网络操作和运行时长，并检查截断历史是否改变旧信号。它不是操作系统安全沙箱，也不能证明代码完全没有未来数据问题；请只运行自己理解和信任的策略代码。
 
