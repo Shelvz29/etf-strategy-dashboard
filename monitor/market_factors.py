@@ -21,6 +21,18 @@ LEADERS=SYMBOLS[4:]
 
 def fetch_prices(symbol,at):
     cutoff=core.market_clock(at.to_pydatetime())['expected_date']
+    # Reuse an independently validated confirmed bundle without another network
+    # request. Keep the original data-fetch time explicit; never use stale days.
+    import performance
+    try:
+        snap,bundle=performance.confirmed_inputs()
+        if snap['source']=='Yahoo 公开日线' and snap['last']['date']==cutoff and symbol in bundle:
+            frame=performance.parse_price(symbol,bundle[symbol],cutoff).tail(400)
+            return {'observations':[{'date':str(d.date()),'price':float(v)} for d,v in frame.adjclose.items()],
+                    'source':f'https://finance.yahoo.com/quote/{symbol}/history/',
+                    'price_fetched':snap['fetched'],'cache_reused':True}
+    except (KeyError,ValueError,TypeError):
+        pass
     end=pd.Timestamp(cutoff,tz='UTC')+pd.Timedelta(days=1)
     payload=core.request_json(symbol,dict(period1=int((end-pd.Timedelta(days=550)).timestamp()),
         period2=int(end.timestamp()),interval='1d',events='div,splits',includeAdjustedClose='true'))
@@ -208,6 +220,7 @@ def render(cutoff,treasury=None):
             if name=='FactSet':latest='／'.join(r.get(k,{}).get('date','—') for k in ('valuation','earnings'))
             st.caption(f"{name} · 最近获取（北京）：{core.display_time(r.get('fetched'))} · 最新观测：{latest}")
             if r.get('last_error'):st.warning(r['last_error']+'；保留旧缓存，过期后待核对。')
+            if r.get('cache_reused'):st.caption('复用已确认策略日线；原行情获取时间（北京）：'+core.display_time(r['price_fetched']))
         st.caption('行情为含分红调整价格，按确认收盘截断；获取时间不等于数据日期。手工数据35天、自动报告45天过期，晚于确认收盘或自动缓存超过3天则未知。此显示模块不向回测传入数据。')
     with st.expander('录入或更新估值、盈利预期数据'):
         st.caption('更新行情时自动检查FactSet公开报告；报告缺失、解析失败或过期则保留旧值或显示未知。有效手工数据优先显示，自动获取不会改写手工记录。手工窗口与自动季内修订分别注明，不直接混用。')

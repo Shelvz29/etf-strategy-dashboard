@@ -230,7 +230,7 @@ def dashboard():
             st.toast("测试提醒已发送；Windows 勿扰模式可能影响弹出显示。")
         st.caption("后台在登录 Windows 后启动；电脑需开机、联网且保持唤醒。关闭浏览器不会停止后台。未配置手机或外部消息渠道。")
         st.subheader("币安产品对应关系")
-        st.caption("XSD和SOXL的默认名称及可买卖状态按你提供的信息设置；SMH、SOXX待你确认实际产品。你可在此修改并保存。")
+        st.caption("完整名称已按公开产品页面补齐；XSD和SOXL的可买卖状态按你提供的信息设置，其他标的仍待你确认。名称设置不影响行情接口。")
         st.write("请依据你账户里的实际产品填写。没有对应产品、受地区限制或暂停交易时，无法原样执行ETF轮动。")
         products = core.product_mappings()
         with st.form("products"):

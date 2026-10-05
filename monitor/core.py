@@ -21,6 +21,7 @@ import exchange_calendars as xc
 import pandas as pd
 import requests
 import code_strategy
+import product_catalog
 
 ROOT = Path(__file__).resolve().parent
 RUNTIME = ROOT / "runtime"
@@ -117,12 +118,19 @@ def put(key, value):
 
 def product_mappings():
     saved = get("products", {})
-    return {symbol: dict(default, **saved.get(symbol, {}))
-            for symbol, default in DEFAULT_PRODUCTS.items()}
+    result = {symbol: dict(default, **saved.get(symbol, {})) for symbol, default in DEFAULT_PRODUCTS.items()}
+    for symbol, product in result.items():
+        if not product.get("name", "").strip():
+            product["name"] = product_catalog.name(symbol)
+    return result
 
 
 class StrategyChanged(RuntimeError):
     """An active profile or price bundle changed while a calculation was running."""
+
+
+class MarketDataUnavailable(RuntimeError):
+    """Provider failure details built only from public host and exception names."""
 
 
 def strategy_fingerprint(profile):
@@ -461,10 +469,12 @@ def pack(frames, signals, source, fetched=None, quotes=None, profile=None):
 
 def request_json(symbol, params):
     failures = []
-    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+    # Transient connections can fail on either host. Retry both hosts once,
+    # rather than abandoning the whole daily bundle after two failed sockets.
+    for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com") * 2:
         try:
             response = requests.get(f"https://{host}/v8/finance/chart/{symbol}", params=params,
-                                    headers={"User-Agent": "Mozilla/5.0"}, timeout=(8, 25))
+                                    headers={"User-Agent": "Mozilla/5.0"}, timeout=(5, 20))
             response.raise_for_status()
             payload = response.json()
             if payload["chart"].get("error") or not payload["chart"].get("result"):
@@ -472,10 +482,10 @@ def request_json(symbol, params):
             if payload["chart"]["result"][0]["meta"]["symbol"] != symbol:
                 raise ValueError("行情标的不匹配")
             return payload
-        except (requests.RequestException, ValueError, KeyError) as exc:
+        except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
             # Never persist request URLs, proxy addresses or credentials in error messages.
             failures.append(f"{host}: {type(exc).__name__}")
-    raise RuntimeError(f"{symbol} 连接失败（{'；'.join(failures)}）")
+    raise MarketDataUnavailable(f"{symbol} 行情连接失败（{'；'.join(failures)}）")
 
 
 def fetch_bundle(full=True, cutoff=None, profile=None):

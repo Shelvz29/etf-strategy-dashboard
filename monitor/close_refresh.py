@@ -7,6 +7,7 @@ import streamlit as st
 import core
 import macro_sources
 import market_factors
+import product_catalog
 
 DELAY_MINUTES=20
 RETRY_MINUTES=5
@@ -55,7 +56,10 @@ def run(plan,logger):
                         core.put('heartbeat',{'time':core.iso_now(),'pid':os.getpid(),'busy':True})
             state['parts'][name]='部分失败' if errors else '完成';state['errors'].extend(errors)
         except Exception as exc:
-            state['parts'][name]='失败';state['errors'].append(name+'：'+type(exc).__name__)
+            detail=(str(exc) if isinstance(exc,core.MarketDataUnavailable) else
+                    '策略已切换，重新检查' if isinstance(exc,core.StrategyChanged) else
+                    '获取或确认失败，保留旧数据')
+            state['parts'][name]='失败';state['errors'].append(name+'：'+detail)
             logger.exception('Post-close %s failed',name)
         core.put(KEY,state)
     def daily():
@@ -99,4 +103,6 @@ def render():
     if state.get('last_success'):
         last=state['last_success'];st.caption(f'最近完整更新：{last["session"]}收盘 · {core.display_time(last["time"])}（北京）。完成表示来源检查成功，宏观／盈利报告仍可能有公布滞后。')
     if state.get('status')=='retry':st.warning(f'保留已确认数据；下次重试（北京）{core.display_time(state["retry_at"])}。'+'；'.join(state['errors']))
+    with st.expander('更新标的完整名称与产品来源'):
+        product_catalog.render((*core.strategy_tickers(), 'RSP','SPY','SMH','XSD'))
     st.caption('按交易日历处理夏令时、节假日和提前收盘；电脑需开机、联网且保持唤醒。后台恢复后补更新最近收盘日，页面每15秒显示最新结果；不提交订单。')
