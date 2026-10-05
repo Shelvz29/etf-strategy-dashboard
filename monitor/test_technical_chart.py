@@ -105,6 +105,37 @@ class TechnicalChartTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 charts.periods(text)
 
+    def test_hover_previous_close_survives_display_crop(self):
+        bars = charts.with_changes(charts.candles(prices(pd.date_range('2026-01-01', periods=4)), '日K'))
+        cropped = bars.iloc[2:]
+        self.assertAlmostEqual(cropped.change_pct.iloc[0], (13 / 12 - 1) * 100)
+        tooltip = charts.figure(cropped, 'TEST', '日K').data[0].hovertext[0]
+        self.assertIn('涨跌幅（较上一根收盘）：+8.33%', tooltip)
+        self.assertIn('本根开收涨跌幅：+4.00%', tooltip)
+        self.assertIn('无前收数据', charts.hover_labels(bars.iloc[:1], '日K')[0])
+        weekly = charts.with_changes(charts.candles(prices(pd.bdate_range('2026-01-05', periods=10)), '周K'))
+        self.assertAlmostEqual(weekly.change_pct.iloc[1], (20 / 15 - 1) * 100)
+
+    def test_range_returns_holidays_bases_adjustment_and_invalid_dates(self):
+        daily = prices(pd.to_datetime(['2026-01-02', '2026-01-05', '2026-01-06', '2026-01-07']))
+        result = charts.range_return(daily, '2026-01-03', '2026-01-06')
+        self.assertEqual(result['first'], pd.Timestamp('2026-01-05'))
+        self.assertEqual(result['last'], pd.Timestamp('2026-01-06'))
+        self.assertEqual(result['sessions'], 2)
+        self.assertAlmostEqual(result['return'], 13 / 12 - 1)
+        self.assertAlmostEqual(charts.range_return(daily, '2026-01-03', '2026-01-06', '首日开盘')['return'], 13 / 11.5 - 1)
+        prior = charts.range_return(daily, '2026-01-03', '2026-01-06', '前一交易日收盘')
+        self.assertAlmostEqual(prior['return'], 13 / 11 - 1)
+        self.assertEqual(prior['baseline_date'], pd.Timestamp('2026-01-02'))
+        self.assertEqual(charts.range_return(daily, '2026-01-05', '2026-01-05')['return'], 0.)
+        adjusted = daily.copy()
+        for field in ('open', 'high', 'low', 'close'):
+            adjusted['adj_' + field] = adjusted[field] * np.array([.5, .6, .7, .8])
+        self.assertAlmostEqual(charts.range_return(adjusted, '2026-01-03', '2026-01-06', adjusted=True)['return'], 13 * .7 / (12 * .6) - 1)
+        for start, end, basis in (('2026-01-07', '2026-01-02', '首日收盘'), ('2026-01-03', '2026-01-04', '首日收盘'), ('2026-01-02', '2026-01-07', '前一交易日收盘')):
+            with self.assertRaises(ValueError):
+                charts.range_return(daily, start, end, basis)
+
     def test_widget_changes_and_yearly_insufficient_history(self):
         profile = core.default_strategy()
         daily = prices(pd.bdate_range("2024-01-02", "2026-10-02"))
@@ -127,6 +158,14 @@ class TechnicalChartTests(unittest.TestCase):
             self.assertEqual(len(app.exception), 0)
             app.selectbox(key="tech_frequency").set_value("周K").run()
             self.assertEqual(len(app.exception), 0)
+            app.selectbox(key="tech_window_周K").set_value("自选日期").run()
+            app.date_input(key="tech_range_start_XSD_自选日期").set_value(pd.Timestamp('2026-01-03').date())
+            app.date_input(key="tech_range_end_XSD_自选日期").set_value(pd.Timestamp('2026-01-06').date())
+            app.run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertTrue(any('所选区间涨跌幅' == m.label for m in app.metric))
+            app.date_input(key="tech_range_end_XSD_自选日期").set_value(pd.Timestamp('2026-01-02').date()).run()
+            self.assertTrue(any('开始日期不能晚于' in w.value for w in app.warning))
             app.selectbox(key="tech_frequency").set_value("年K").run()
             self.assertEqual(len(app.exception), 0)
             self.assertTrue(any("历史K线根数不足" in x.value for x in app.info))

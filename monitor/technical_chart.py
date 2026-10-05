@@ -11,7 +11,8 @@ import core
 import performance
 
 PERIODS = {"日K": None, "周K": "W-FRI", "年K": "YE"}
-WINDOWS = {"1个月": 1, "3个月": 3, "6个月": 6, "1年": 12, "3年": 36, "5年": 60, "全部历史": None}
+WINDOWS = {"1个月": 1, "3个月": 3, "6个月": 6, "1年": 12, "3年": 36, "5年": 60, "全部历史": None, "自选日期": None}
+RETURN_BASES = ("首日收盘", "首日开盘", "前一交易日收盘")
 
 
 def periods(text):
@@ -40,6 +41,52 @@ def candles(frame, frequency, adjusted=False):
         # Actual last session avoids displaying a future Friday/December 31.
         result.index = pd.DatetimeIndex(result.pop("last_session"))
     return result
+
+
+def with_changes(bars):
+    result = bars.copy()
+    result["previous_close"] = bars.close.shift(1)
+    result["change_pct"] = (bars.close / result.previous_close - 1) * 100
+    return result
+
+
+def hover_labels(data, frequency):
+    previous = data.previous_close if "previous_close" in data else data.close.shift(1)
+    labels = []
+    for date, row in data.iterrows():
+        prev = previous.loc[date]
+        change = f"{(row.close / prev - 1) * 100:+.2f}%" if pd.notna(prev) else "无前收数据"
+        body = (row.close / row.open - 1) * 100
+        labels.append(f"{date:%Y-%m-%d} · {frequency}<br>开 ${row.open:,.2f} · 高 ${row.high:,.2f}"
+                      f"<br>低 ${row.low:,.2f} · 收 ${row.close:,.2f}"
+                      f"<br>涨跌幅（较上一根收盘）：{change}<br>本根开收涨跌幅：{body:+.2f}%")
+    return labels
+
+
+def range_return(daily, start, end, basis=RETURN_BASES[0], adjusted=False):
+    start, end = pd.Timestamp(start), pd.Timestamp(end)
+    if start > end:
+        raise ValueError("开始日期不能晚于结束日期。")
+    if basis not in RETURN_BASES:
+        raise ValueError("区间计算起点无效。")
+    selected = daily.loc[(daily.index >= start) & (daily.index <= end)]
+    if selected.empty:
+        raise ValueError("所选日期内没有已确认交易日。")
+    first, last = selected.index[0], selected.index[-1]
+    prefix = "adj_" if adjusted else ""
+    baseline_date = first
+    if basis == "前一交易日收盘":
+        earlier = daily.loc[daily.index < first]
+        if earlier.empty:
+            raise ValueError("所选首日前没有可用收盘价，请选择首日开盘或首日收盘。")
+        baseline_date = earlier.index[-1]
+        baseline = earlier.iloc[-1][prefix + "close"]
+    else:
+        baseline = selected.iloc[0][prefix + ("open" if basis == "首日开盘" else "close")]
+    final = selected.iloc[-1][prefix + "close"]
+    return {"first": first, "last": last, "baseline_date": baseline_date,
+            "baseline": float(baseline), "final": float(final), "return": float(final / baseline - 1),
+            "sessions": len(selected)}
 
 
 def rsi(close, length):
@@ -122,6 +169,7 @@ def figure(data, symbol, frequency, rsi_length=None, lower=30, upper=70, kdj_par
                         vertical_spacing=.035, row_heights=heights)
     dates = data.index.strftime("%Y-%m-%d").tolist()
     fig.add_trace(go.Candlestick(x=dates, open=data.open, high=data.high, low=data.low, close=data.close,
+                  hovertext=hover_labels(data, frequency), hoverinfo="text",
                   name=f"{symbol} {frequency}", increasing_line_color="#d64b4b", decreasing_line_color="#078571"), row=1, col=1)
     colors = ["#d68c20", "#2d76d2", "#9355bf", "#049d9d", "#e869ab", "#7f8130"]
     for i, name in enumerate(c for c in data if c.startswith(("MA", "EMA", "BOLL"))):
@@ -203,7 +251,7 @@ def render(profile):
         st.info(f"{symbol}暂无已确认日线，请等待后台更新行情。"); return
     try:
         daily = confirmed_frame(symbol, core.json_dump(bundle[symbol]), cutoff)
-        bars = candles(daily, frequency, adjusted)
+        bars = with_changes(candles(daily, frequency, adjusted))
         computed = indicators(bars, ma, ema, rsi_length, boll_length, width, kdj_params)
     except (ValueError, KeyError, TypeError) as exc:
         st.warning(f"{symbol}K线暂不可用：{exc}"); return
@@ -212,6 +260,37 @@ def render(profile):
         st.info("历史K线根数不足，暂无法计算：" + "、".join(unavailable) + "。可缩短指标周期。")
     if WINDOWS[window]:
         computed = computed.loc[computed.index >= computed.index[-1] - pd.DateOffset(months=WINDOWS[window])]
+    with st.expander("自选区间涨跌幅", expanded=True):
+        a, b, c = st.columns(3)
+        range_key = symbol + "_" + window
+        start = a.date_input("区间开始日期", value=computed.index[0].date(), min_value=daily.index[0].date(),
+                             max_value=daily.index[-1].date(), key="tech_range_start_" + range_key)
+        end = b.date_input("区间结束日期", value=daily.index[-1].date(), min_value=daily.index[0].date(),
+                           max_value=daily.index[-1].date(), key="tech_range_end_" + range_key)
+        basis = c.selectbox("涨跌幅计算起点", RETURN_BASES, key="tech_return_basis")
+        try:
+            result = range_return(daily, start, end, basis, adjusted)
+            a, b, c = st.columns(3)
+            a.metric("所选区间涨跌幅", f"{result['return']:+.2%}")
+            b.metric("起点价格", f"${result['baseline']:,.2f}")
+            c.metric("末日收盘价格", f"${result['final']:,.2f}")
+            st.caption(f"区间内交易日：{result['first']:%Y-%m-%d} 至 {result['last']:%Y-%m-%d}，共{result['sessions']}日；"
+                       f"计算起点：{result['baseline_date']:%Y-%m-%d} {basis}。按所选价格口径的日线计算，与K线周期无关；不计交易费用。")
+        except ValueError as exc:
+            result = None
+            st.warning(str(exc))
+        st.caption("选择上方“自选日期”可让K线同步显示该区间；其他显示范围保留原图，只计算区间涨跌幅。鼠标悬停K线可查看单根涨跌幅。")
+    if window == "自选日期":
+        if result is None:
+            return
+        # Include any aggregate whose underlying trading days overlap the range.
+        if frequency == "日K":
+            computed = computed.loc[result['first']:result['last']]
+        else:
+            periods_index = computed.index.to_period("Y-DEC" if frequency == "年K" else "W-FRI")
+            computed = computed.loc[(periods_index.start_time <= result['last']) & (computed.index >= result['first'])]
+            st.caption("周／年K显示与所选日期相交的整根K线；区间涨跌幅仍严格按所选日线日期计算。")
+    st.caption("悬停涨跌幅=本根收盘／上一根收盘−1；首根可用历史无前收时注明缺失，不按显示窗口重新计算前收。")
     st.plotly_chart(figure(computed, symbol, frequency, rsi_length, lower, upper, kdj_params, kdj_lower, kdj_upper), width="stretch", key="technical_kline")
     if frequency != "日K":
         end = bars.index[-1].to_period("Y-DEC" if frequency == "年K" else "W-FRI").end_time.normalize()
