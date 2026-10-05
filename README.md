@@ -151,14 +151,18 @@ CPI使用当前BLS未季调指数计算同比，不是完整首次公告归档�
 
 ## 测试
 
-不需要下载行情的公开测试，检查两个适配版与原代码在构造行情上的每日状态一致、双资产资金守恒、成本、信号延迟和截断历史：
+不需要下载行情的公开测试，检查两份适配策略、资金核算、宏观与参考因素隔离、自动更新、行情恢复、技术图表、回撤事件和新增现金规则：
 
 ```powershell
 cd monitor
-..\.venv\Scripts\python.exe -m unittest test_moomoo test_macro test_market_factors test_full_allocation -v
+..\.venv\Scripts\python.exe -m unittest test_moomoo test_macro test_market_factors test_full_allocation test_close_refresh test_data_reliability test_technical_chart test_drawdown_review test_breakout_research test_streak_research -v
+cd ..
+# 研究规则测试还需要可选研究依赖；不需要私人行情或策略数据库。
+.\.venv\Scripts\python.exe -m pip install -r research/requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s research -p "test_*.py" -v
 ```
 
-宏观模块9项构造数据测试核对与预设研究条件一致、公告时点、负油价、来源失败保留缓存、未知分数、后台独立更新、公告日期校验和Streamlit显示。完整回归套件为 `test_monitor test_performance test_strategies test_macd_risk test_moomoo test_macro`，使用原研究的冻结行情和MACD研究结果作为基准。这些下载行情不在公开仓库中；没有对应数据时不要把缺失数据错误视为策略失败。GitHub Actions运行可独立复现的构造行情测试；新源码另做编译检查。
+宏观模块9项构造数据测试核对与预设研究条件一致、公告时点、负油价、来源失败保留缓存、未知分数、后台独立更新、公告日期校验和Streamlit显示。本机完整回归可在 `monitor` 目录运行 `python -m unittest discover -p "test_*.py" -v`，其中 `test_monitor test_performance test_strategies test_macd_risk` 还使用原研究的冻结行情和MACD研究结果作为基准。这些下载行情不在公开仓库中；没有对应数据时不要把缺失数据错误视为策略失败。GitHub Actions运行上面的10个公开看板模块和5个研究规则模块，并对源码做编译检查；不运行需要私人输入的完整历史研究。
 
 六项参考因素有12项公开构造数据测试，覆盖四级阈值、OFR滞后、未来／缺失／过期数据、失败缓存、手工优先、报告明确预测提取、后台独立更新及Streamlit卡片和HTML转义；测试核对实现和策略隔离，不证明投资效果。
 

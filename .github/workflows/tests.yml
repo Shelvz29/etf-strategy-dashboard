@@ -10,7 +10,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -r monitor/requirements.txt
-      - run: python -m compileall -q monitor backtests/2026-10-02-xsd-soxl
-      - run: python -m unittest test_moomoo test_macro test_market_factors test_full_allocation -v
+      - run: python -m pip install -r monitor/requirements.txt -r research/requirements.txt
+      - run: python -m compileall -q monitor research backtests/2026-10-02-xsd-soxl
+      - run: python -m unittest test_moomoo test_macro test_market_factors test_full_allocation test_close_refresh test_data_reliability test_technical_chart test_drawdown_review test_breakout_research test_streak_research -v
         working-directory: monitor
+      - run: python -m unittest discover -s research -p 'test_*.py' -v
