@@ -143,6 +143,8 @@ CPI使用当前BLS未季调指数计算同比，不是完整首次公告归档�
 
 需要复查最大几段回撤时，运行 `.\.venv\Scripts\python.exe monitor\drawdown_review.py`（Linux使用 `.venv/bin/python monitor/drawdown_review.py`）。默认只读分析当前启用版本，也可用 `--strategy-id 本机策略ID --revision 版本号 --count 5` 指定版本；不更换策略、不下单。按账户净值前高至恢复前高划分互不重复的回撤事件，纳入尚未恢复的事件，生成排名CSV、净值与调仓CSV、五段日K PNG和可离线打开的交互HTML。图中包含基础ETF／SOXL日K、EMA20、参考MACD(12,26,9)、策略净值与实际仓位，标记日期属于账户净值而非ETF顶底。先在今日看板确认完整日线；工具使用与历史回测相同的次日开盘、单边10基点费用口径。输出仅保存在被Git忽略的 `monitor/runtime/drawdown_reviews`，不导出策略源代码。
 
+跌破/突破现金规则研究：当前启用本机SMH／SOXL Python策略后，运行 `.\.venv\Scripts\python.exe monitor\breakout_research.py`（Linux使用 `.venv/bin/python monitor/breakout_research.py`）。固定测试19组近期高低点、MA、EMA及缓冲参数，跌破后覆盖为现金，突破后仅恢复原策略目标，保留原MACD与恢复确认现金优先级。通道排除当天高低价；包括最低价触及在内的所有规则都收盘确认、次日真实开盘成交，不能视为盘中阈值止损。报告包含连续持仓的全历史与近1／2／3／5年、时间分段、费用敏感性、原策略压力日期对照和候选策略代码。用早期Calmar选择的组合与全历史事后最好组合分别标注；时间分段检查不能当作独立样本外或统计显著证据。工具不保存到策略列表或启用策略；所有输出（包括继承本机策略的私人代码）仅存放在被Git忽略的 `monitor/runtime/breakout_research`，不得直接公开。可在策略编辑器自行导入代码保存为新策略。
+
 ## 测试
 
 不需要下载行情的公开测试，检查两个适配版与原代码在构造行情上的每日状态一致、双资产资金守恒、成本、信号延迟和截断历史：
