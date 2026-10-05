@@ -64,7 +64,27 @@ def rsi(close, length):
     return pd.Series(output, index=close.index)
 
 
-def indicators(bars, ma=(), ema=(), rsi_length=None, boll_length=None, boll_width=2.0):
+def kdj(bars, length=9, k_smooth=3, d_smooth=3):
+    """Full-window RSV; recursive K/D seeded at 50, J is not clipped."""
+    for n in (length, k_smooth, d_smooth):
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 500:
+            raise ValueError("KDJ周期须为1至500的整数")
+    low = bars.low.rolling(length, min_periods=length).min()
+    high = bars.high.rolling(length, min_periods=length).max()
+    span = high - low
+    rsv = ((bars.close - low) / span.replace(0, np.nan) * 100).mask(span.eq(0), 50.)
+    result = pd.DataFrame(np.nan, index=bars.index, columns=["K", "D", "J"])
+    prev_k = prev_d = 50.
+    for i, value in enumerate(rsv):
+        if pd.isna(value):
+            continue
+        prev_k += (value - prev_k) / k_smooth
+        prev_d += (prev_k - prev_d) / d_smooth
+        result.iloc[i] = (prev_k, prev_d, 3 * prev_k - 2 * prev_d)
+    return result
+
+
+def indicators(bars, ma=(), ema=(), rsi_length=None, boll_length=None, boll_width=2.0, kdj_params=None):
     result = bars.copy()
     for n in (*ma, *ema, *([rsi_length] if rsi_length else []), *([boll_length] if boll_length else [])):
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 500:
@@ -83,6 +103,8 @@ def indicators(bars, ma=(), ema=(), rsi_length=None, boll_length=None, boll_widt
         result["BOLL中轨"] = mid
         result["BOLL上轨"] = mid + boll_width * deviation
         result["BOLL下轨"] = mid - boll_width * deviation
+    if kdj_params is not None:
+        result[["K", "D", "J"]] = kdj(bars, *kdj_params)
     return result
 
 
@@ -91,10 +113,13 @@ def confirmed_frame(symbol, payload, cutoff):
     return performance.parse_price(symbol, json.loads(payload), cutoff)
 
 
-def figure(data, symbol, frequency, rsi_length=None, lower=30, upper=70):
+def figure(data, symbol, frequency, rsi_length=None, lower=30, upper=70, kdj_params=None, kdj_lower=20, kdj_upper=80):
     has_rsi = rsi_length is not None
-    fig = make_subplots(rows=3 if has_rsi else 2, cols=1, shared_xaxes=True,
-                        vertical_spacing=.035, row_heights=[.64, .14, .22] if has_rsi else [.8, .2])
+    has_kdj = kdj_params is not None
+    oscillators = int(has_rsi) + int(has_kdj)
+    heights = [.5, .12, .19, .19] if oscillators == 2 else [.64, .14, .22] if oscillators else [.8, .2]
+    fig = make_subplots(rows=2 + oscillators, cols=1, shared_xaxes=True,
+                        vertical_spacing=.035, row_heights=heights)
     dates = data.index.strftime("%Y-%m-%d").tolist()
     fig.add_trace(go.Candlestick(x=dates, open=data.open, high=data.high, low=data.low, close=data.close,
                   name=f"{symbol} {frequency}", increasing_line_color="#d64b4b", decreasing_line_color="#078571"), row=1, col=1)
@@ -108,11 +133,19 @@ def figure(data, symbol, frequency, rsi_length=None, lower=30, upper=70):
         for level in (lower, upper):
             fig.add_hline(y=level, line_dash="dot", line_color="#98a5ad", row=3, col=1)
         fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1)
+    if has_kdj:
+        row = 3 + int(has_rsi)
+        for name, color in (("K", "#d68c20"), ("D", "#2d76d2"), ("J", "#9355bf")):
+            fig.add_trace(go.Scatter(x=dates, y=data[name], name=name, mode="lines",
+                          connectgaps=False, line=dict(color=color, width=1.5)), row=row, col=1)
+        for level in (kdj_lower, kdj_upper):
+            fig.add_hline(y=level, line_dash="dot", line_color="#98a5ad", row=row, col=1)
+        fig.update_yaxes(title_text="KDJ", row=row, col=1)
     fig.update_yaxes(title_text="美元", row=1, col=1)
     fig.update_yaxes(title_text="成交量", row=2, col=1)
     # Category axis omits weekends/holidays without constructing range-break grids.
     fig.update_xaxes(type="category", nticks=10, showgrid=False, rangeslider_visible=False)
-    fig.update_layout(height=700 if has_rsi else 550, margin=dict(l=0, r=10, t=40, b=10),
+    fig.update_layout(height=850 if oscillators == 2 else 700 if oscillators else 550, margin=dict(l=0, r=10, t=40, b=10),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="white", hovermode="x unified",
                       legend=dict(orientation="h", y=1.12), uirevision=f"{symbol}-{frequency}")
     return fig
@@ -127,12 +160,13 @@ def render(profile):
     frequency = b.selectbox("K线周期", list(PERIODS), key="tech_frequency")
     window = c.selectbox("K线显示范围", list(WINDOWS), index=6 if frequency == "年K" else 4 if frequency == "周K" else 3, key="tech_window_" + frequency)
     adjusted = st.radio("K线价格口径", ["拆股调整（不含分红）", "含分红复权"], horizontal=True, key="tech_adjusted") == "含分红复权"
-    selected = st.multiselect("显示技术指标", ["MA", "EMA", "RSI", "BOLL"], default=["MA", "EMA"], key="tech_indicators")
+    selected = st.multiselect("显示技术指标", ["MA", "EMA", "RSI", "BOLL", "KDJ"], default=["MA", "EMA"], key="tech_indicators")
     unit = {"日K": "交易日", "周K": "周", "年K": "年"}[frequency]
     st.caption(f"周期单位：{unit}，例如MA7表示7根{frequency}收盘价的平均值；先在全部可用历史上计算，再截取显示范围。")
     ma = ema = []
     rsi_length = boll_length = None
     width, lower, upper = 2.0, 30, 70
+    kdj_params, kdj_lower, kdj_upper = None, 20, 80
     with st.expander("技术指标参数", expanded=True):
         a, b = st.columns(2)
         ma_text = a.text_input("MA周期（逗号分隔）", "5,20,60", key="tech_ma", disabled="MA" not in selected)
@@ -146,6 +180,16 @@ def render(profile):
             a, b = st.columns(2)
             boll_length = int(a.number_input("BOLL周期", 2, 500, 20, key="tech_boll"))
             width = b.number_input("BOLL标准差倍数", .1, 10.0, 2.0, .1, key="tech_boll_width")
+        if "KDJ" in selected:
+            a, b, c = st.columns(3)
+            length = int(a.number_input("KDJ计算周期", 1, 500, 9, key="tech_kdj_length"))
+            k_smooth = int(b.number_input("K平滑周期", 1, 500, 3, key="tech_kdj_k"))
+            d_smooth = int(c.number_input("D平滑周期", 1, 500, 3, key="tech_kdj_d"))
+            kdj_params = (length, k_smooth, d_smooth)
+            a, b = st.columns(2)
+            kdj_lower = int(a.number_input("KDJ下参考线", 0, 49, 20, key="tech_kdj_lower"))
+            kdj_upper = int(b.number_input("KDJ上参考线", 51, 100, 80, key="tech_kdj_upper"))
+            st.caption("KDJ默认(9,3,3)，K／D初始值50；J可超出0～100，图表保留实际数值。")
     try:
         ma = periods(ma_text) if "MA" in selected else []
         ema = periods(ema_text) if "EMA" in selected else []
@@ -160,7 +204,7 @@ def render(profile):
     try:
         daily = confirmed_frame(symbol, core.json_dump(bundle[symbol]), cutoff)
         bars = candles(daily, frequency, adjusted)
-        computed = indicators(bars, ma, ema, rsi_length, boll_length, width)
+        computed = indicators(bars, ma, ema, rsi_length, boll_length, width, kdj_params)
     except (ValueError, KeyError, TypeError) as exc:
         st.warning(f"{symbol}K线暂不可用：{exc}"); return
     unavailable = [name for name in computed.columns if name not in bars and computed[name].isna().all()]
@@ -168,7 +212,7 @@ def render(profile):
         st.info("历史K线根数不足，暂无法计算：" + "、".join(unavailable) + "。可缩短指标周期。")
     if WINDOWS[window]:
         computed = computed.loc[computed.index >= computed.index[-1] - pd.DateOffset(months=WINDOWS[window])]
-    st.plotly_chart(figure(computed, symbol, frequency, rsi_length, lower, upper), width="stretch", key="technical_kline")
+    st.plotly_chart(figure(computed, symbol, frequency, rsi_length, lower, upper, kdj_params, kdj_lower, kdj_upper), width="stretch", key="technical_kline")
     if frequency != "日K":
         end = bars.index[-1].to_period("Y-DEC" if frequency == "年K" else "W-FRI").end_time.normalize()
         next_session = core.calendar(pd.Timestamp(cutoff).year).next_session(cutoff)
@@ -176,3 +220,5 @@ def render(profile):
             st.caption(f"最新{frequency}尚未结束，仅合成截至{cutoff}的已确认日线，会随新收盘数据变化。")
     st.caption(f"数据来源：{snap['source']} · 已确认至{cutoff}（美东） · 获取时间（北京）：{core.display_time(snap['fetched'])}。红涨绿跌；公开ETF日线，不是币安证券代币报价。")
     st.caption("MA为简单均线；EMA从最早可用收盘价递推，满周期后显示；RSI采用Wilder平滑，持平为50；BOLL使用总体标准差。图表参数不会改变策略、仓位或回测。")
+    if kdj_params:
+        st.caption(f"KDJ{kdj_params}：RSV按最近{kdj_params[0]}根K线的最高／最低价计算；K、D按各自平滑周期递推，J=3K−2D；高低价相等时RSV取50，完整周期前留空。")

@@ -65,14 +65,39 @@ class TechnicalChartTests(unittest.TestCase):
     def test_indicators_no_future_fill_or_input_mutation(self):
         bars = charts.candles(prices(pd.date_range("2026-01-01", periods=60)), "日K")
         before = bars.copy(deep=True)
-        full = charts.indicators(bars, [5, 7], [9], 14, 20)
-        short = charts.indicators(bars.iloc[:40], [5, 7], [9], 14, 20)
+        full = charts.indicators(bars, [5, 7], [9], 14, 20, kdj_params=(9, 3, 3))
+        short = charts.indicators(bars.iloc[:40], [5, 7], [9], 14, 20, kdj_params=(9, 3, 3))
         assert_frame_equal(full.iloc[:40], short)
         assert_frame_equal(bars, before)
         fig = charts.figure(full, "TEST", "日K", 14)
         self.assertEqual(fig.data[0].type, "candlestick")
         self.assertEqual(len(fig.data[0].close), 60)
         self.assertEqual(fig.layout.yaxis3.range, (0, 100))
+
+    def test_kdj_hand_calculation_flat_range_and_unbounded_j(self):
+        bars = pd.DataFrame({'high': [10., 11., 12.], 'low': [0., 0., 0.], 'close': [5., 6., 9.]})
+        result = charts.kdj(bars, 3, 3, 3)
+        self.assertTrue(result.iloc[:2].isna().all().all())
+        self.assertAlmostEqual(result.K.iloc[2], 58.33333333333333)
+        self.assertAlmostEqual(result.D.iloc[2], 52.77777777777778)
+        self.assertAlmostEqual(result.J.iloc[2], 69.44444444444443)
+        flat = pd.DataFrame({'high': [10.] * 6, 'low': [10.] * 6, 'close': [10.] * 6})
+        self.assertTrue(charts.kdj(flat, 3).iloc[2:].eq(50).all().all())
+        bullish = pd.DataFrame({'high': [10.] * 6, 'low': [0.] * 6, 'close': [10.] * 6})
+        self.assertGreater(charts.kdj(bullish, 3).J.iloc[-1], 100)
+        for params in ((0, 3, 3), (9, 0, 3), (9, 3, 501)):
+            with self.assertRaises(ValueError):
+                charts.kdj(bars, *params)
+
+    def test_kdj_separate_panel_with_or_without_rsi(self):
+        bars = charts.candles(prices(pd.date_range('2026-01-01', periods=60)), '日K')
+        data = charts.indicators(bars, rsi_length=14, kdj_params=(9, 3, 3))
+        for rsi_length, row in ((None, 3), (14, 4)):
+            fig = charts.figure(data, 'TEST', '日K', rsi_length=rsi_length, kdj_params=(9, 3, 3))
+            axis = getattr(fig.layout, f'yaxis{row}')
+            self.assertEqual(axis.title.text, 'KDJ')
+            self.assertIsNone(axis.range)
+            self.assertEqual([trace.name for trace in fig.data[-3:]], ['K', 'D', 'J'])
 
     def test_input_validation(self):
         self.assertEqual(charts.periods("5，7,20,7"), [5, 7, 20])
@@ -90,8 +115,11 @@ class TechnicalChartTests(unittest.TestCase):
             app.run()
             self.assertEqual(len(app.exception), 0)
             self.assertEqual(app.selectbox(key="tech_symbol_default").options, ["QQQ", "XSD", "SOXL"])
-            app.multiselect(key="tech_indicators").set_value(["MA", "EMA", "RSI", "BOLL"])
+            app.multiselect(key="tech_indicators").set_value(["MA", "EMA", "RSI", "BOLL", "KDJ"])
             app.run()
+            self.assertEqual(app.number_input(key="tech_kdj_length").value, 9)
+            app.number_input(key="tech_kdj_length").set_value(7)
+            app.number_input(key="tech_kdj_k").set_value(2)
             app.text_input(key="tech_ma").set_value("5,7")
             app.number_input(key="tech_rsi").set_value(7)
             app.number_input(key="tech_boll").set_value(7)
