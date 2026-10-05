@@ -10,6 +10,7 @@ import performance_ui
 import state_ui
 import strategy_ui
 import macro_ui
+import technical_chart
 
 core.bootstrap()
 st.set_page_config(page_title=core.APP_NAME + " · " + core.active_strategy()["name"], page_icon="📈", layout="wide")
@@ -138,10 +139,12 @@ def dashboard():
                 st.warning("盘中预估已过期，请等待行情更新。收盘确认目标保持不变。")
         elif clock["is_open"]:
             st.caption("盘中预估尚未形成，正在等待三个标的的完整当日数据。")
+        technical_chart.render(profile)
         macro_panel = macro_ui.render()
         import market_factors
         market_factors.render(last['date'],macro_panel['values'].get('rates')
             if macro_panel and macro_panel['groups']['rates'] is not None else None)
+        st.subheader("策略信号参考线")
         chart(snap["chart"], cfg, base)
         st.caption("信号价格口径：" + ("含分红调整后的价格。" if cfg.signal_adjusted else "拆股调整价格，不额外调整分红。"))
         cols = st.columns(4)
