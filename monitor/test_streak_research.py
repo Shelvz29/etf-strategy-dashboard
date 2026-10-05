@@ -6,7 +6,7 @@ import pandas as pd
 
 import core
 import performance
-from streak_research import apply_streak, candidates, dominance_flags, editor_code, holding_comparison, html_table, streak_features
+from streak_research import apply_streak, candidates, dominance_flags, editor_code, holding_comparison, html_table, recovery_pairs, soxl_candidates, streak_features
 
 
 class StreakResearchTests(unittest.TestCase):
@@ -125,6 +125,42 @@ class StreakResearchTests(unittest.TestCase):
         self.assertEqual(r['extra_cash_sessions'],1)
         self.assertEqual(r['different_holding_sessions'],1)
         self.assertEqual(r['extra_cash_dates'],str(self.index[0].date()))
+
+    def test_soxl_grid_and_matched_recovery_control(self):
+        grid=soxl_candidates()
+        self.assertEqual(len(grid),45)
+        self.assertEqual(len({c['key'] for c in grid}),45)
+        primary=[c for c in grid if c['family']=='SOXL双指标']
+        controls=[c for c in grid if c['family']=='SMH恢复对照']
+        self.assertEqual((len(primary),len(controls)),(37,8))
+        self.assertTrue(all(c['rules']['symbol']=='SOXL' for c in grid))
+        self.assertTrue(all(c['rules']['recovery_symbol']=='SOXL' for c in primary))
+        for c in controls:
+            match={**c['rules'],'recovery_symbol':'SOXL'}
+            self.assertEqual(sum(p['rules']==match for p in primary),1)
+
+    def test_soxl_ma_uses_soxl_prices_and_retains_cash_priority(self):
+        frames={s:f.copy() for s,f in self.frames.items()}
+        frames['SMH']['close']=pd.Series(np.arange(100.,110.),index=self.index)
+        rule={**self.rules,'symbol':'SOXL','recovery_symbol':'SOXL'}
+        soxl=apply_streak(self.signals,frames,rule)
+        control=apply_streak(self.signals,frames,{**rule,'recovery_symbol':'SMH'})
+        self.assertEqual(soxl.symbol.iloc[3],'CASH')
+        self.assertEqual(control.symbol.iloc[3],'SOXL')
+        pd.testing.assert_series_equal(soxl.streak_recovery_ma,
+            frames['SOXL'].close.rolling(2).mean().reindex(self.signals.index),check_names=False)
+        prefix=apply_streak(self.signals.iloc[:4],{s:f.iloc[:6] for s,f in frames.items()},rule)
+        pd.testing.assert_frame_equal(soxl.iloc[:4],prefix)
+
+    def test_pair_table_keeps_identical_exit_configuration(self):
+        controls=[c for c in soxl_candidates() if c['family']=='SMH恢复对照']
+        control=controls[0]
+        primary=next(c for c in soxl_candidates() if c['rules']=={**control['rules'],'recovery_symbol':'SOXL'})
+        table=pd.DataFrame([{'key':primary['key'],'cagr':.5,'max_drawdown':.4},
+                            {'key':control['key'],'cagr':.45,'max_drawdown':.42}])
+        row=recovery_pairs(table,[primary,control])[0]
+        self.assertAlmostEqual(row['cagr_difference'],.05)
+        self.assertAlmostEqual(row['drawdown_difference'],-.02)
 
 
 if __name__=='__main__':unittest.main()

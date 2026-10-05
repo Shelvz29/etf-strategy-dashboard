@@ -126,6 +126,48 @@ def candidates():
     return items
 
 
+def soxl_candidates():
+    """37 SOXL exit/recovery variants plus eight matched SMH recovery controls."""
+    items=[]
+    def add(mode,threshold,period,kind='ma',window=3,recovery_kind='rising',recovery_symbol='SOXL'):
+        key=f'SOXL_{mode}{window}_d{int(threshold*10000)}_{kind}{period}_{recovery_kind}_recover{recovery_symbol}'
+        loss='连跌≥2日' if mode=='streak' else f'近{window}日累计'
+        name=f'SOXL {loss}跌{threshold:.0%}→{recovery_symbol} {kind.upper()}{period}上升'
+        if recovery_kind=='turn':name+='（严格拐头）'
+        family='SOXL双指标' if recovery_symbol=='SOXL' else 'SMH恢复对照'
+        rules=dict(symbol='SOXL',recovery_symbol=recovery_symbol,mode=mode,threshold=threshold,
+            ma_days=period,ma_kind=kind,window=window,recovery_kind=recovery_kind)
+        items.append(dict(key=key,name=name,rules=rules,family=family))
+    for threshold in (.06,.12,.18,.24,.30):
+        for period in (5,10,20):add('streak',threshold,period)
+    for threshold in (.12,.18,.24):
+        for period in (10,20):add('streak',threshold,period,'ema')
+    for window in (3,5):
+        for threshold in (.12,.18,.24):
+            for period in (10,20):add('window',threshold,period,window=window)
+    for threshold in (.12,.24):
+        for period in (10,20):add('streak',threshold,period,recovery_kind='turn')
+    for threshold in (.06,.12,.18,.24):
+        for period in (10,20):add('streak',threshold,period,recovery_symbol='SMH')
+    return items
+
+
+def recovery_pairs(table,configurations):
+    """Same exit and MA settings; change only the recovery price symbol."""
+    rows=[]
+    configs={c['key']:c for c in configurations if c['rules'] is not None}
+    metrics=table.set_index('key')
+    for control in (c for c in configs.values() if c.get('family')=='SMH恢复对照'):
+        paired={**control['rules'],'recovery_symbol':'SOXL'}
+        primary=next(c for c in configs.values() if c['rules']==paired)
+        left,right=metrics.loc[primary['key']],metrics.loc[control['key']]
+        rows.append(dict(threshold=paired['threshold'],ma_days=paired['ma_days'],
+            soxl_cagr=float(left.cagr),smh_cagr=float(right.cagr),
+            soxl_drawdown=float(left.max_drawdown),smh_drawdown=float(right.max_drawdown),
+            cagr_difference=float(left.cagr-right.cagr),drawdown_difference=float(left.max_drawdown-right.max_drawdown)))
+    return rows
+
+
 def editor_code(profile,rules):
     labels={**profile.get('state_labels',{}),'STREAK_CASH_TRIGGER':'累计连跌触发现金避险',
             'STREAK_CASH_WAIT':'现金等待均线向上'}
@@ -187,15 +229,18 @@ def holding_comparison(navs,chosen,names):
     return records
 
 
-def run():
+def run(study='mixed'):
+    if study not in ('mixed','soxl'):raise ValueError('Unknown study')
     profile=core.active_strategy();fingerprint=profile['fingerprint']
     if profile.get('kind')!='python' or core.base_symbol(profile)!='SMH':
         raise ValueError('本研究需要当前本机SMH/SOXL Python策略')
     snapshot,bundle=perf.confirmed_inputs();cutoff=snapshot['last']['date']
     frames,underlying,_,_=perf.datasets(bundle,cutoff,[],profile=profile)
-    folder=core.RUNTIME/'streak_research'/f"{profile['id']}-v{profile['revision']}-{cutoff}"
+    output_root='streak_soxl_research' if study=='soxl' else 'streak_research'
+    folder=core.RUNTIME/output_root/f"{profile['id']}-v{profile['revision']}-{cutoff}"
     folder.mkdir(parents=True,exist_ok=True)
-    configurations=[dict(key='baseline',name=f"原策略 v{profile['revision']}",rules=None),*candidates()]
+    configurations=[dict(key='baseline',name=f"原策略 v{profile['revision']}",rules=None,family='原策略'),
+                    *(soxl_candidates() if study=='soxl' else candidates())]
     navs,sources,rows,periods={},{},[],[]
     for i,config in enumerate(configurations):
         source=underlying if config['rules'] is None else apply_streak(underlying,frames,config['rules'])
@@ -203,7 +248,8 @@ def run():
         navs[config['key']],sources[config['key']]=nav,source
         nav.to_csv(folder/(config['key']+'-净值.csv'),encoding='utf-8-sig')
         trades.to_csv(folder/(config['key']+'-调仓.csv'),index=False,encoding='utf-8-sig')
-        row=dict(key=config['key'],name=config['name'],cagr=m['cagr'],max_drawdown=-m['max_drawdown_close'],
+        row=dict(key=config['key'],name=config['name'],family=config.get('family','研究候选'),
+                 cagr=m['cagr'],max_drawdown=-m['max_drawdown_close'],
                  calmar=m['calmar'],sharpe=m['sharpe_rf0'],cash_fraction=m['cash_days_fraction'],
                  rebalance_days=m['rebalance_days'],risk_signal_days=int(source.get('streak_risk',pd.Series(dtype=bool)).sum()))
         for start,end,label,prefix in (('2017-01-03','2021-12-31','2017—2021','train'),
@@ -223,7 +269,7 @@ def run():
         print(f"{i+1}/{len(configurations)} {config['name']} 年化{row['cagr']:.2%} 回撤{row['max_drawdown']:.2%}",flush=True)
     table=pd.DataFrame(rows);baseline=table[table.key.eq('baseline')].iloc[0]
     table['both_improved']=dominance_flags(table,baseline)
-    alternatives=table[table.key.ne('baseline')]
+    alternatives=table[table.key.ne('baseline')&table.family.ne('SMH恢复对照')]
     bounded=alternatives[alternatives.train_max_drawdown.le(.50)]
     train_key=(bounded if len(bounded) else alternatives).sort_values('train_calmar',ascending=False).iloc[0].key
     full_key=alternatives.sort_values('calmar',ascending=False).iloc[0].key
@@ -261,14 +307,16 @@ def run():
     runs=stress_runs(frames,navs['baseline'])
     names={c['key']:c['name'] for c in configurations}
     holdings=holding_comparison(navs,chosen,names)
+    pairs=recovery_pairs(table,configurations) if study=='soxl' else []
+    if pairs:pd.DataFrame(pairs).to_csv(folder/'恢复标的对照.csv',index=False,encoding='utf-8-sig')
     table=table.sort_values('calmar',ascending=False)
     for filename,records in (('全部候选结果.csv',table),('分段与近年结果.csv',periods),
             ('交易成本敏感性.csv',costs),('五段压力区间.csv',stress),('五段连续跌幅.csv',runs),('新增现金日统计.csv',holdings)):
         pd.DataFrame(records).to_csv(folder/filename,index=False,encoding='utf-8-sig')
-    metadata=dict(profile_name=profile['name'],revision=profile['revision'],fingerprint=fingerprint,
+    metadata=dict(study=study,profile_name=profile['name'],revision=profile['revision'],fingerprint=fingerprint,
         cutoff=cutoff,source=snapshot['source'],fetched=snapshot['fetched'],configurations=configurations,
         train_choice=train_key,full_choice=full_key,lowest_choice=lowest_key,balanced_choice=balanced_key,exported=export,
-        results=table.to_dict('records'),costs=costs,stress=stress,runs=runs,holdings=holdings)
+        results=table.to_dict('records'),costs=costs,stress=stress,runs=runs,holdings=holdings,recovery_pairs=pairs)
     (folder/'结果.json').write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding='utf-8')
     chart=make_subplots(rows=2,cols=1,shared_xaxes=True,vertical_spacing=.09,
                          subplot_titles=['初始1万元资金曲线 · 对数轴','账户日终回撤'])
@@ -282,8 +330,11 @@ def run():
                                   showlegend=False,line_color=color),row=2,col=1)
     chart.update_yaxes(type='log',row=1,col=1)
     chart.update_layout(height=800,template='plotly_white',hovermode='x unified')
-    note=("严格连跌：至少2个交易日收盘低于前收，累计跌幅=1−当前收盘/连跌开始前收盘；上涨或平盘立即重置。"
-        "另比较近3/5日累计跌幅，允许中间小反弹，两者不混称。恢复均线统一观察SMH，普通版为当天均线高于昨天；"
+    scope=("本轮37组候选的新增卖出跌幅与恢复均线都使用SOXL，另外8组仅把恢复均线换回SMH作对照。"
+           "原v2的SMH MACD、恢复确认和基础资产分配继续保留；这不是SOXL与现金独立策略。"
+           if study=='soxl' else "恢复均线统一观察SMH。")
+    note=(scope+"严格连跌：至少2个交易日收盘低于前收，累计跌幅=1−当前收盘/连跌开始前收盘；上涨或平盘立即重置。"
+        "另比较近3/5日累计跌幅，允许中间小反弹，两者不混称。普通恢复版为当天均线高于昨天；"
         "严格拐头版还要求昨天均线不高于前天。新增层覆盖为现金，解除后仅恢复原策略当日目标，"
         "原MACD和恢复确认现金状态仍优先；同日下跌信号优先，不作盘中阈值成交。信号收盘确认、次日开盘执行，"
         "单边成本0.1%，现金利率0，价格已拆股调整，账户净值含分红调整；不含汇率、税和证券代币费用。"
@@ -293,12 +344,17 @@ def run():
         "本研究参照已知大跌，基础策略也已研究这些历史；时间分段不是独立样本外，结果不能称为统计显著或未来保证。"
         "当前策略未切换，代码只写入本机私有研究目录，未保存或启用新策略。")
     names={c['key']:c['name'] for c in configurations}
+    pair_section=('<h2>同样SOXL卖出规则，仅改变恢复均线标的</h2>'+
+        html_table(pairs,{'threshold':'累计跌幅阈值','ma_days':'MA周期','soxl_cagr':'SOXL恢复年化',
+            'smh_cagr':'SMH恢复年化','soxl_drawdown':'SOXL恢复回撤','smh_drawdown':'SMH恢复回撤'}) if pairs else '')
+    study_label='SOXL累计连跌与SOXL均线恢复研究' if study=='soxl' else '累计连跌与均线恢复研究'
     links=''.join(f'<li><a href="{html.escape(e["file"])}">{html.escape(e["name"])}</a></li>' for e in export)
-    report=f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>累计连跌与均线恢复策略研究</title>
+    report=f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>{study_label}</title>
 <style>body{{max-width:1650px;margin:30px auto;padding:20px;font:16px system-ui;color:#20344b}}p{{line-height:1.8}}table{{border-collapse:collapse;font-size:14px;width:100%;margin-bottom:30px}}td,th{{padding:9px;border-bottom:1px solid #ddd;text-align:left}}th{{background:#eef3f9}}a{{color:#286bb0}}</style>
-<h1>{html.escape(profile['name'])} · v{profile['revision']} · 累计连跌与均线恢复研究</h1><p>2017-01-03—{cutoff}；当前100%进攻仓位版本。</p><p>{note}</p>
+<h1>{html.escape(profile['name'])} · v{profile['revision']} · {study_label}</h1><p>2017-01-03—{cutoff}；当前100%进攻仓位版本。</p><p>{note}</p>
 <h2>五段原策略大回撤中的最深连续下跌</h2>{html_table(runs,{'symbol':'观察标的','peak':'账户前高','trough':'账户谷底','run_start':'连跌首日','run_end':'连跌末日','days':'连跌交易日','drop':'累计跌幅'})}
-<h2>全历史结果 · 按Calmar排序</h2>{html_table(table,{'name':'规则','cagr':'年化','max_drawdown':'最大回撤','calmar':'Calmar','sharpe':'Sharpe（现金利率0）','cash_fraction':'现金占比','rebalance_days':'调仓天数','both_improved':'收益与回撤同时改善'})}
+<h2>全历史结果 · 按Calmar排序</h2>{html_table(table,{'family':'类型','name':'规则','cagr':'年化','max_drawdown':'最大回撤','calmar':'Calmar','sharpe':'Sharpe（现金利率0）','cash_fraction':'现金占比','rebalance_days':'调仓天数','both_improved':'收益与回撤同时改善'})}
+{pair_section}
 <p>早期选择：{html.escape(names[train_key])}；全历史Calmar最佳：{html.escape(names[full_key])}；全历史回撤最小：{html.escape(names[lowest_key])}；回撤折中：{html.escape(names[balanced_key])}。</p>
 {chart.to_html(full_html=False,include_plotlyjs=True,config={'displaylogo':False})}
 <h2>分段与近1/2/3/5年</h2>{html_table([p for p in periods if p['key'] in ['baseline',*chosen]],{'name':'规则','period':'区间','cagr':'年化','max_drawdown':'最大回撤','calmar':'Calmar'})}
@@ -306,7 +362,7 @@ def run():
 <h2>与原策略实际持仓差异</h2><p>新增现金日是新规则收盘持有现金、但原策略仍持有资产的日期；具体日期保存在新增现金日统计CSV。少数日期带来的微小收益差异不能证明稳健性。</p>{html_table(holdings,{'name':'规则','extra_cash_sessions':'新增现金交易日','different_holding_sessions':'持仓不同交易日'})}
 <h2>原策略五段压力日期对照</h2><p>固定日期内的区间回撤，不等于各候选全历史最大回撤。</p>{html_table(stress,{'name':'规则','start':'区间起点','end':'区间终点','return_':'区间收益','window_drawdown':'区间最大回撤'})}
 <h2>本机编辑器研究代码</h2><ul>{links}</ul></html>'''
-    (folder/'累计连跌与均线恢复研究.html').write_text(report,encoding='utf-8')
+    (folder/(study_label+'.html')).write_text(report,encoding='utf-8')
     if core.active_strategy()['fingerprint']!=fingerprint:raise ValueError('运行中原策略发生变化，须重新研究')
     print('REPORT '+str(folder),flush=True)
     print(table[['name','cagr','max_drawdown','calmar','both_improved']].head(12).to_string(index=False),flush=True)
@@ -314,5 +370,7 @@ def run():
 
 
 if __name__=='__main__':
-    argparse.ArgumentParser(description='连跌现金与均线恢复研究；不启用、不下单，输出仅在私有runtime').parse_args()
-    run()
+    parser=argparse.ArgumentParser(description='连跌现金与均线恢复研究；不启用、不下单，输出仅在私有runtime')
+    parser.add_argument('--study',choices=('mixed','soxl'),default='mixed',help='soxl同时用SOXL跌幅和SOXL恢复均线')
+    args=parser.parse_args()
+    run(args.study)
