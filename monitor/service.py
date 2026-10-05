@@ -8,6 +8,7 @@ import time
 import core
 import macro_sources
 import market_factors
+import close_refresh
 
 
 def main():
@@ -45,6 +46,17 @@ def main():
             core.put("heartbeat", {"time": core.iso_now(), "pid": os.getpid(), "busy": False})
             request = core.get("refresh_request")
             forced = request is not None and request != last_request
+            # Persistent daily job includes all panels, even if the regular
+            # 30-minute observation timer just ran before the close.
+            plan=None if args.once else close_refresh.pending(clock['now'])
+            if plan:
+                close_refresh.run(plan,logger)
+                full_due=time.monotonic()+300
+                macro_due=time.monotonic()+1800
+                if forced:
+                    last_request=request
+                    core.put('refresh_handled',request)
+                    forced=False
             snap = core.get("snapshot")
             missing = snap["last"]["date"] != clock["expected_date"] or snap["source"] != "Yahoo 公开日线"
             needs_daily_check = core.get("validated_session") != clock["expected_date"]

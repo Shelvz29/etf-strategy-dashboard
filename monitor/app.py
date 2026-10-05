@@ -104,6 +104,8 @@ def dashboard():
         cols[3].metric("QQQ市场环境", "偏牛" if last["regime"] == "BULL" else "偏熊")
         st.caption(f"信号日 {last['date']}（美东）→ 对应执行开盘（北京）{core.display_time(execute_open.isoformat())}。相同目标不要求每天重新配平；现金比例 {core.percent(1-last['weight'])}。")
         st.caption("仓位比例以你分配给本策略的资金为基准。")
+        import close_refresh
+        close_refresh.render()
         if "weight_QQQ" in last:
             st.info("分项目标：" + core.target_text(last))
         mapping = core.product_mappings()
