@@ -39,10 +39,11 @@ class FactorTests(unittest.TestCase):
 
     def test_thresholds_and_linked_concentration(self):
         self.cache['RSP']['observations'][-1]['price']=96.
-        self.cache['SMH']['observations'][-1]['price']=109.
+        self.cache['SMH']['observations'][-1]['price']=95.
+        self.cache['XSD']['observations'][-1]['price']=86.
         for symbol in factors.LEADERS:self.cache[symbol]['observations'][-1]['price']=91.
         # Last two days are not yet eligible for conservative OFR assessment.
-        for row in self.cache['OFR']['observations'][-3:]:row.update(credit=1.,funding=.5)
+        for row in self.cache['OFR']['observations'][-3:]:row.update(credit=.8,funding=.5)
         manual={'valuation':{'date':self.cutoff,'values':{'pe':25.},'scope':'S&P500','source':factors.FACTSET},
             'earnings':{'date':self.cutoff,'values':{'revision1':-2.,'revision3':-5.},'scope':'S&P500 FY2027','source':factors.FACTSET}}
         self.assertEqual([r['level'] for r in self.assess(manual)],[2,2,2,2,2,2])
@@ -57,7 +58,7 @@ class FactorTests(unittest.TestCase):
     def test_missing_sessions_and_stale_cache_do_not_signal_clear(self):
         self.cache['RSP']['observations'].pop(-15)
         self.cache['OFR']['fetched']='2026-09-01T00:00:00Z'
-        self.cache['AMD']['observations'].pop()
+        self.cache['SMH']['observations'].pop()
         rows=self.assess();self.assertIsNone(rows[1]['level']);self.assertIsNone(rows[3]['level'])
         self.assertIsNone(rows[4]['level']);self.assertIsNone(rows[5]['level'])
 
@@ -66,7 +67,7 @@ class FactorTests(unittest.TestCase):
         def fetch(symbol,at):
             if symbol=='RSP':raise ConnectionError('private URL secret')
             return copy.deepcopy(self.cache[symbol])
-        with patch.object(factors,'fetch_prices',side_effect=fetch),patch.object(factors,'fetch_ofr',return_value=self.cache['OFR']):
+        with patch.object(factors,'fetch_prices',side_effect=fetch),patch.object(factors,'fetch_ofr',return_value=self.cache['OFR']),patch.object(factors.factor_forecasts,'fetch',side_effect=ConnectionError('unavailable')):
             new=factors.refresh(force=True,at=self.at+pd.Timedelta(minutes=2))
         self.assertEqual(new['RSP']['observations'],self.cache['RSP']['observations'])
         self.assertEqual(new['RSP']['fetched'],self.cache['RSP']['fetched'])
@@ -90,6 +91,41 @@ class FactorTests(unittest.TestCase):
         for row in self.cache['OFR']['observations'][-2:]:row.update(credit=100.,funding=100.)
         rows=self.assess();self.assertEqual(rows[3]['level'],0);self.assertEqual(rows[4]['level'],0)
         self.assertEqual(rows[3]['date'],'2026-09-30')
+
+    def test_automatic_forecast_and_manual_precedence(self):
+        self.cache['FactSet']={'fetched':self.at.isoformat(),
+            'valuation':{'date':self.cutoff,'values':{'pe':28.},'scope':'S&P500','source':factors.FACTSET},
+            'earnings':{'date':self.cutoff,'values':{'quarter_revision':-10.},'scope':'S&P500 Q3','source':factors.FACTSET}}
+        rows=self.assess();self.assertEqual(rows[0]['level'],3);self.assertEqual(rows[2]['level'],3)
+        manual={'valuation':{'date':self.cutoff,'values':{'pe':20.},'scope':'S&P500','source':factors.FACTSET}}
+        self.assertEqual(self.assess(manual)[0]['level'],0)
+        self.cache['FactSet']['valuation']['date']='2026-08-01'
+        self.assertIsNone(self.assess()[0]['level'])
+        self.cache['FactSet']['earnings']['date']='2026-10-05'
+        self.assertIsNone(self.assess()[2]['level'])
+
+    def test_severe_levels_and_no_fixed_leader_dependency(self):
+        self.cache['RSP']['observations'][-1]['price']=90.
+        self.cache['SMH']['observations'][-1]['price']=85.
+        self.cache['XSD']['observations'][-1]['price']=70.
+        self.cache.pop('AMD')
+        for r in self.cache['OFR']['observations'][-3:]:r.update(credit=2.,funding=1.)
+        rows=self.assess();self.assertEqual([rows[i]['level'] for i in (1,3,4,5)],[3,3,3,3])
+
+    def test_public_article_exact_forecasts_only(self):
+        from factor_forecasts import parse_article,fetch
+        # Constructed input; no live provider dependency.
+        body='May 6, 2022. Earnings estimates for Q2 2022 are reviewed. On a per-share basis, estimated earnings for the second quarter decreased by 5% from March 31 to April 30. The forward 12-month P/E ratio is 25.0.'
+        result=parse_article(body,factors.FACTSET,self.at)
+        self.assertEqual(result['valuation']['values']['pe'],25.)
+        self.assertEqual(result['earnings']['values']['quarter_revision'],-5.)
+        bad='May 6, 2022. Actual EPS decreased by 20%. Estimated earnings growth fell to 3% from 7%.'
+        self.assertEqual(parse_article(bad,factors.FACTSET,self.at),{})
+        previous={'earnings':result['earnings']}
+        from types import SimpleNamespace
+        with patch('factor_forecasts.request',side_effect=[SimpleNamespace(text='<h2><a href="/example">report</a></h2>'),SimpleNamespace(text='May 6, 2022. The forward 12-month P/E ratio is 25.0.')]):
+            new=fetch(self.at,previous)
+        self.assertEqual(new['earnings'],previous['earnings'])
 
     def test_independent_service_refresh_after_macro_failure(self):
         import service
